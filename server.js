@@ -5,10 +5,8 @@ var THREE = require("three");
 var players = {};
 const radius = 100;
 const REFRESH_TIME = 100; // Milliseconds between successive refreshes
-const SCENE = new THREE.Scene();
-const TRAIL_LENGTH = 100;
+const TRAIL_LENGTH = 100; // Maximum number of rectangles in plane's trail
 const SPEED = 0.3;
-var trail = [];
 var cur_id = 0;
 
 http.listen(3000, function(){
@@ -21,6 +19,9 @@ app.get("/", function(req, res) {
 app.get("/js/three.js", function(req, res) {
 	res.sendFile(__dirname + "/js/three.js");
 });
+app.get("/js/client.js", function(req, res) {
+	res.sendFile(__dirname + "/js/client.js");
+});
 
 function create_new_player() {
 	var r = Math.random() * radius / 2 + radius / 4;
@@ -30,9 +31,8 @@ function create_new_player() {
 		plane : draw_plane(),
 		x_frac : 0,
 		y_frac : 0,
-		turn : 0,
-		trail : [],
-		trail_index : 0,
+		turn : 0, // -1 indicates that the "a" key has been pressed, 1 that the "d" key has been pressed, and 0 that neither has been pressed. 
+		trail_index : 0, // The last used index in trail.
 		id : cur_id,
 		plane_container : new THREE.Group(),
 	};
@@ -42,6 +42,12 @@ function create_new_player() {
 		r * Math.sin(theta) * Math.sin(phi),
 		r * Math.cos(theta)
 	);
+	new_player.plane_container.updateMatrixWorld();
+	new_player.plane.updateMatrixWorld();
+	new_player.trail = [{
+		left : new_player.plane.getObjectByName("left guide").getWorldPosition(),
+		right : new_player.plane.getObjectByName("right guide").getWorldPosition()
+	}];
 	return new_player;
 }
 
@@ -76,19 +82,24 @@ function send_location( player ) {
 
 io.on("connection", function(socket) {
 	var new_player = create_new_player();
-	socket.emit("id", new_player.id);
-	socket.broadcast.emit("add", {
+	var msg = {
 		id : new_player.id,
 		pos : new_player.plane_container.position,
 		outer_rot : new_player.plane_container.rotation,
-		inner_rot : new_player.plane.rotation
-	});
+		inner_rot : new_player.plane.rotation,
+		trail : new_player.trail,
+		trail_index : 0
+	};
+	socket.emit("id", msg);
+	socket.broadcast.emit("add", msg);
 	for (var id in players) {
 		socket.emit("add", {
 			id : players[id].id,
 			pos : players[id].plane_container.getWorldPosition(),
 			outer_rot : players[id].plane_container.rotation,
-			inner_rot : players[id].plane.rotation
+			inner_rot : players[id].plane.rotation,
+			trail : players[id].trail,
+			trail_index : players[id].trail_index
 		});
 	}
 	socket.on("status", function(status) {
@@ -98,7 +109,7 @@ io.on("connection", function(socket) {
 			players[status.id].turn = status.turn;
 		}
 		else {
-			console.log("Missing:", status);
+			console.log("Data received from unknown player:", status);
 		}
 	});
 	players[cur_id] = new_player;
@@ -120,9 +131,6 @@ function draw_plane() {
 	right_guide.position.set( -5, 0, 0 );
 	plane.add(left_guide);
 	plane.add(right_guide);
-	left_guide.old_coords = left_guide.getWorldPosition();
-	right_guide.old_coords = right_guide.getWorldPosition();
-	SCENE.add(plane);
 	return plane;
 }
 
