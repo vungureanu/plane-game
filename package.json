@@ -1,0 +1,10 @@
+{
+  "name": "three-test",
+  "version": "0.0.1",
+  "description": "three test",
+  "dependencies": {
+    "express": "^4.16.2",
+    "socket.io": "^2.0.4",
+    "three": "^0.89.0"
+  }
+}
