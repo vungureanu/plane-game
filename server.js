@@ -8,7 +8,7 @@ const INNER_RADIUS = 50;
 const REFRESH_TIME = 100; // Milliseconds between successive refreshes
 const TRAIL_LENGTH = 100; // Maximum number of rectangles in plane's trail
 const NORMAL_SPEED = 0.5;
-const FAST_SPEED = 1;
+const FAST_SPEED = 3;
 var cur_id = 0;
 var destroy_queue = [];
 
@@ -38,7 +38,10 @@ function create_new_player() {
 		click : false, // Whether mouse is depressed
 		id : cur_id, // ID assigned to player
 		plane_container : new THREE.Group(), // Group containing only "plane".
-		collision_data : [], // Change-of-basis matrix from {v1, v2, v3} to {e1, e2, e3}, where v1 and v2 are the sides of a trail square, and v3 is their cross product.
+		collision_data : [],
+		/* Change-of-basis matrix from {v1, v2, v3} to {e1, e2, e3}, where v1 and v2 are the sides of a trail square,
+		and v3 is their cross product.  Also includes the center point of the trail rectangle and a normal to the
+		trail rectangle. */
 		trail : [] // Coordinates of trail edges
 	};
 	new_player.plane_container.add(new_player.plane);
@@ -63,6 +66,7 @@ function update_world() {
 	for ( var id in players ) {
 		update_location(players[id]);
 		send_location(players[id]);
+		check_collisions();
 		clear_destroyed_players();
 	}
 }
@@ -161,20 +165,20 @@ function update_trail( player ) {
 	v2.sub( old_right );
 	var v3 = new THREE.Vector3(0, 0, 0);
 	v3.crossVectors(v1, v2); // If v1 and v2 are not parallel, then {v1, v2, v3} is a basis of R^3.
-	var inv_mat = new THREE.Matrix3();
-	inv_mat.set( 
+	var matrix = new THREE.Matrix3();
+	matrix.set( 
 		new_right.x - new_left.x, new_right.x - old_right.x, v3.x,
 		new_right.y - new_left.y, new_right.y - old_right.y, v3.y,
 		new_right.z - new_left.z, new_right.z - old_right.z, v3.z
 	);
 	try {
-		inv_mat = inv_mat.getInverse(inv_mat, true);
+		matrix = matrix.getInverse(matrix, true);
 	}
 	catch(e) {
 		console.log("Matrix not invertible:", old_right, new_left, new_right);
 	}
 	var collision_data = {
-		matrix : inv_mat,
+		matrix : matrix,
 		normal : v3,
 		point : old_left
 	}
@@ -184,12 +188,6 @@ function update_trail( player ) {
 	player.collision_data.push(collision_data);
 	player.trail.push( {left : new_left, right : new_right} );
 	player.trail.shift();
-	for (var collision_data of player.collision_data) {
-		if ( intersects(collision_data, new_left, new_right) ) {
-			destroy_queue.push(player);
-			return 0; // Make sure player can only be added to "destroy_queue" once
-		}
-	}
 }
 
 /* INTERSECTION DETECTION */
@@ -218,17 +216,33 @@ function intersects( collision_data, p1, p2 ) {
 	point_of_intersection = v.clone();
 	point_of_intersection.multiplyScalar(c);
 	point_of_intersection.add(p1);
-	//console.log(point_of_intersection, point_of_intersection.dot(collision_data.normal));
 	point_of_intersection.sub(collision_data.point);
 	point_of_intersection.applyMatrix3(collision_data.matrix);
-	//console.log(point_of_intersection);
 	if ( point_of_intersection.x >= 0 && point_of_intersection.x <= 1 && point_of_intersection.y >= 0 && point_of_intersection.y <= 1) {
 		return true;
 	}
 	return false;
 }
 
-var m = new THREE.Matrix3();
+function check_collisions() {
+	for ( var trail_setter in players ) {
+		for ( var collision_data of players[trail_setter].collision_data ) {
+			for ( var collider in players ) {
+				if (collider != trail_setter) {
+					let p1 = players[collider].plane.getObjectByName("left guide").getWorldPosition();
+					let p2 = players[collider].plane.getObjectByName("right guide").getWorldPosition();
+					if ( intersects(collision_data, p1, p2) ) {
+						console.log("Hit.", players[collider].id);
+						destroy_queue.push(players[collider]);
+						break; // Make sure player can only be added to "destroy_queue" once
+					}
+				}
+			}
+		}
+	}
+}
+
+/* var m = new THREE.Matrix3();
 m.set(
 	1, 1, -1,
 	1, 1, 1,
@@ -242,4 +256,4 @@ collision_data = {
 }
 var p1 = new THREE.Vector3(-2, 7, 1);
 var p2 = new THREE.Vector3(0, 1, 3);
-intersects(collision_data, p1, p2 );
+intersects(collision_data, p1, p2 ); */

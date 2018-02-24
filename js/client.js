@@ -1,14 +1,23 @@
 const scene = new THREE.Scene();
-const renderer = new THREE.WebGLRenderer();
-renderer.setSize( window.innerWidth, window.innerHeight );
-document.body.appendChild( renderer.domElement );
+const renderer = new THREE.WebGLRenderer( {canvas : document.getElementById("main_screen")} );
+console.log(renderer.domElement);
+var frac = 19 / 20;
+var game_height = window.innerHeight * frac;
+renderer.setSize( window.innerWidth, game_height );
+const gas_bar = document.getElementById("gasBar");
 var socket = io();
 const trail_material = new THREE.MeshBasicMaterial({
 		color: 0x0000ff,
 		side : THREE.DoubleSide,
 		transparent : true,
 		opacity: 0.5
-	});
+});
+const own_material = new THREE.MeshBasicMaterial({
+		color: 0x00ff00,
+		side : THREE.DoubleSide,
+		transparent : true,
+		opacity: 0.5
+});
 const TRAIL_LENGTH = 100;
 const SPEED = 0.1;
 const SEND_INTERVAL = 100; // Milliseconds between successive send operations
@@ -18,11 +27,10 @@ const INNER_RADIUS = 50;
 var x_frac = 0;
 var y_frac = 0;
 var players = {}; // State (spatial coordinates and orientation) of all other players
-var contrails = []; // Player's own contrails
-var turn = 0;
-var click = false;
+var turn = 0; // Clockwise or counterclockwise rotation in plane of screen.
+var click = false; // Whether mouse is depressed.
 var own_id;
-var send_data_id;
+var send_data_id; // Identifies process sending data to server.
 
 /* GRAPHICS */
 
@@ -74,53 +82,30 @@ function add_trail( player, new_coords ) {
 	triangleGeometry.vertices[3] = new_coords.right;
 	triangleGeometry.faces.push( new THREE.Face3(0, 1, 2) );
 	triangleGeometry.faces.push( new THREE.Face3(1, 2, 3) );
-	var square = new THREE.Mesh( triangleGeometry, trail_material );
-	if (player.trail[player.trail_index] != undefined) {
-		scene.remove(player.trail[player.trail_index]);
+	if (player.id == own_id) {
+		var square = new THREE.Mesh( triangleGeometry, own_material );
 	}
-	player.trail[player.trail_index] = square;
-	player.trail_index = (player.trail_index + 1) % TRAIL_LENGTH;
+	else {
+		var square = new THREE.Mesh( triangleGeometry, trail_material );
+	}
+	player.trail.push(square);
 	scene.add( square );
 	player.old_coords = new_coords;
 }
 
+function shorten_trail( player ) {
+	scene.remove(player.trail[0]);
+	player.trail.shift();
+}
+
 var plane_and_camera = new THREE.Group();
 var own_plane = draw_plane();
-var camera = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 1000 );
+var camera = new THREE.PerspectiveCamera( 75, window.innerWidth/game_height, 0.1, 1000 );
 plane_and_camera.add(own_plane);
 plane_and_camera.add(camera);
 camera.position.set(0, 0, -25);
 camera.lookAt(0, 0, 0);
 scene.add(plane_and_camera);
-
-window.addEventListener('keypress', function(e) {
-	if (e.keyCode == 65 || e.keyCode == 97) {
-		turn = -1;
-	}
-	if (e.keyCode == 68 || e.keyCode == 100) {
-		turn = 1;
-	}
-});
-window.addEventListener('keyup', function(e) {
-	if (e.keyCode == 65 || e.keyCode == 97 || e.keyCode == 68 || e.keyCode == 100) {
-		turn = 0;
-	}
-});
-window.addEventListener('mousemove', function(e) {
-	x_frac = (e.clientX - window.innerWidth / 2) / window.innerWidth;
-	y_frac = (e.clientY - window.innerHeight / 2) / window.innerHeight;
-});
-window.addEventListener('resize', function() {
-	renderer.setSize( window.innerWidth, window.innerHeight );
-	camera.aspect = window.innerWidth / window.innerHeight;
-	camera.updateProjectionMatrix();
-});
-window.addEventListener('mousedown', function() {
-	click = true;
-});
-window.addEventListener('mouseup', function() {
-	click = false;
-});
 
 // CLIENT-SERVER COMMUNICATION
 
@@ -148,10 +133,12 @@ socket.on("update", function(status) {
 		right : new THREE.Vector3( status.trail.right.x, status.trail.right.y, status.trail.right.z )
 	};
 	add_trail(player, new_coords);
+	shorten_trail(player);
 	renderer.render(scene, camera);
 });
 
 socket.on("id", function(status) {
+	own_id = status.id;
 	plane_and_camera.position.set(status.pos.x, status.pos.y, status.pos.z);
 	var outer_rot = new THREE.Euler(status.outer_rot._x, status.outer_rot._y, status.outer_rot._z, status.outer_rot._order);
 	var inner_rot = new THREE.Euler(status.inner_rot._x, status.inner_rot._y, status.inner_rot._z, status.inner_rot._order);
@@ -162,13 +149,15 @@ socket.on("id", function(status) {
 	var left = own_plane.getObjectByName("left guide").getWorldPosition();
 	var right = own_plane.getObjectByName("right guide").getWorldPosition();
 	players[status.id] = {
+		id : status.id,
 		plane_container : plane_and_camera,
 		plane : own_plane,
-		trail : [ {left : left, right : right} ],
-		trail_index : 0,
+		trail : [],
 		old_coords : {left : left, right : right}
 	};
-	own_id = status.id;
+	for ( var i = 0; i < TRAIL_LENGTH; i++ ) {
+		players[own_id].trail.push( {left : left, right : right} );
+	}
 });
 
 socket.on("add", function(status) {
@@ -180,16 +169,18 @@ socket.on("add", function(status) {
 	var inner_rot = new THREE.Euler(status.inner_rot._x, status.inner_rot._y, status.inner_rot._z, status.inner_rot._order);
 	plane_container.setRotationFromEuler(outer_rot);
 	plane.setRotationFromEuler(inner_rot);
+	plane_container.updateMatrixWorld();
+	plane.updateMatrixWorld();
 	var left = plane.getObjectByName("left guide").getWorldPosition();
 	var right = plane.getObjectByName("right guide").getWorldPosition();
 	players[status.id] = {
+		id : status.id,
 		plane_container : plane_container,
 		plane : plane,
-		trail : [ {left : left, right : right} ],
-		trail_index : 0,
+		trail : [],
 		old_coords : { left : left, right : right }
 	};
-	for ( var i = 1; i <= status.trail_index; i++ ) {
+	for ( var i = 0; i < TRAIL_LENGTH; i++ ) {
 		var new_coords = {
 			left : new THREE.Vector3( status.trail[i].left.x, status.trail[i].left.y, status.trail[i].left.z ),
 			right : new THREE.Vector3( status.trail[i].right.x, status.trail[i].right.y, status.trail[i].right.z )
@@ -200,5 +191,55 @@ socket.on("add", function(status) {
 });
 
 socket.on("destroy", function(id) {
-	clearInterval(send_data_id);
+	if (id in players) {
+		for ( square of players[id].trail ) {
+			scene.remove(square);
+		}
+		scene.remove(players[id].plane_container);
+		delete players[id];
+	}
+	if (id == own_id) {
+		alert("Ouch!");
+		clearInterval(send_data_id);
+	}
 });
+
+// CONTROLS
+
+window.addEventListener('keypress', function(e) {
+	if (e.keyCode == 65 || e.keyCode == 97) {
+		turn = -1;
+	}
+	if (e.keyCode == 68 || e.keyCode == 100) {
+		turn = 1;
+	}
+});
+window.addEventListener('keyup', function(e) {
+	if (e.keyCode == 65 || e.keyCode == 97 || e.keyCode == 68 || e.keyCode == 100) {
+		turn = 0;
+	}
+});
+window.addEventListener('mousemove', function(e) {
+	x_frac = (e.clientX - window.innerWidth / 2) / window.innerWidth;
+	y_frac = (e.clientY - game_height / 2) / game_height;
+});
+window.addEventListener('resize', function() {
+	game_height = window.innerHeight * frac;
+	renderer.setSize( window.innerWidth, game_height );
+	camera.aspect = window.innerWidth / game_height;
+	gas_bar.style.top = game_height;
+	camera.updateProjectionMatrix();
+});
+window.addEventListener('mousedown', function() {
+	click = true;
+});
+window.addEventListener('mouseup', function() {
+	click = false;
+});
+
+gas_bar.style.top = game_height;
+gas_bar.width = window.innerWidth;
+gas_bar.height = window.innerHeight - game_height;
+var gas_context = gas_bar.getContext("2d");
+gas_context.fillStyle = "rgb(0, 0, 0)";
+gas_context.fillRect(0, 0, gas_bar.width/2, gas_bar.height);

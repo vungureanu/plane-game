@@ -3,10 +3,21 @@
 		<title>Plane Game</title>
 		<style>
 			body { margin: 0; }
-			/*canvas { width: 100%; height: 100% }
+			#gasBar {
+				position : absolute;
+				top : 0px;
+				left : 0px;
+			}
+			#main_screen {
+				position : absolute;
+				top : 0px;
+				left : 0px;
+			}
 		</style>
 	</head>
 	<body>
+		<canvas id="main_screen"></canvas>
+		<canvas id="gasBar"></canvas>
 		<script src="/socket.io/socket.io.js"></script>
 		<script src="/js/three.js"></script>
 		<script src="/js/client.js"></script>
