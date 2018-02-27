@@ -2,7 +2,7 @@ var app = require("express")();
 var http = require("http").createServer(app);
 var io = require("socket.io")(http);
 var THREE = require("three");
-var players = {};
+var players = new Map();
 const OUTER_RADIUS = 200;
 const INNER_RADIUS = 50;
 const REFRESH_TIME = 100; // Milliseconds between successive refreshes
@@ -47,8 +47,8 @@ function Player() {
 	);
 	this.plane.updateMatrixWorld();
 	var lr_coords = {
-		left : this.plane.getObjectByName("left guide").getWorldPosition(),
-		right : this.plane.getObjectByName("right guide").getWorldPosition()
+		left : this.plane.getObjectByName("left").getWorldPosition(),
+		right : this.plane.getObjectByName("right").getWorldPosition()
 	}
 	for (var i = 0; i < TRAIL_LENGTH; i++) {
 		this.trail.push(lr_coords);
@@ -56,9 +56,9 @@ function Player() {
 }
 
 function update_world() {
-	for ( var id in players ) {
-		update_location(players[id]);
-		send_location(players[id]);
+	for ( var player of players.values() ) {
+		update_location(player);
+		send_location(player);
 		check_collisions();
 		clear_destroyed_players();
 	}
@@ -71,7 +71,7 @@ setInterval(update_world, REFRESH_TIME);
 function clear_destroyed_players() {
 	destroy_queue.forEach( function (player) {
 		io.emit("destroy", player.id);
-		delete players[player.id];
+		players.delete(player.id);
 	});
 	destroy_queue = [];
 }
@@ -103,26 +103,25 @@ io.on("connection", function(socket) {
 	};
 	socket.emit("id", msg);
 	socket.broadcast.emit("add", msg);
-	for (var id in players) {
+	for (var player of players.values()) {
 		socket.emit("add", {
-			id : players[id].id,
-			pos : players[id].plane.getWorldPosition(),
-			rot : players[id].plane.rotation,
-			trail : players[id].trail
+			id : player.id,
+			pos : player.plane.getWorldPosition(),
+			rot : player.plane.rotation,
+			trail : player.trail
 		});
 	}
 	socket.on("status", function(status) {
-		console.log("S", status);
-		if ( status.id in players ) {
-			players[status.id].x_frac = status.x_frac;
-			players[status.id].y_frac = status.y_frac;
-			players[status.id].click = status.click;
+		if ( players.has(status.id) ) {
+			players.get(status.id).x_frac = status.x_frac;
+			players.get(status.id).y_frac = status.y_frac;
+			players.get(status.id).click = status.click;
 		}
 		else {
 			console.log("Data received from unknown player:", status);
 		}
 	});
-	players[cur_id] = new_player;
+	players.set(cur_id, new_player);
 	cur_id += 1;
 });
 
@@ -133,9 +132,9 @@ function draw_plane() {
 	var geometry = new THREE.SphereGeometry(1, 32, 32);
 	var material = new THREE.MeshBasicMaterial( {color: 0xff0000} );
 	var left_guide = new THREE.Mesh(geometry, material);
-	left_guide.name = "left guide";
+	left_guide.name = "left";
 	var right_guide = new THREE.Mesh(geometry, material);
-	right_guide.name = "right guide";
+	right_guide.name = "right";
 	left_guide.position.set( 5, 0, 0 );
 	right_guide.position.set( -5, 0, 0 );
 	plane.add(left_guide);
@@ -144,8 +143,8 @@ function draw_plane() {
 }
 
 function update_trail( player ) {
-	var new_left = player.plane.getObjectByName("left guide").getWorldPosition();
-	var new_right = player.plane.getObjectByName("right guide").getWorldPosition();
+	var new_left = player.plane.getObjectByName("left").getWorldPosition();
+	var new_right = player.plane.getObjectByName("right").getWorldPosition();
 	var old_left = player.trail[TRAIL_LENGTH-1].left;
 	var old_right = player.trail[TRAIL_LENGTH-1].right;
 	var v1 = new THREE.Vector3().copy( new_right );
@@ -214,15 +213,15 @@ function intersects( collision_data, p1, p2 ) {
 }
 
 function check_collisions() {
-	for ( var trail_setter in players ) {
-		for ( var collision_data of players[trail_setter].collision_data ) {
-			for ( var collider in players ) {
+	for ( var trail_setter of players.values() ) {
+		for ( var collision_data of trail_setter.collision_data ) {
+			for ( var collider of players.values() ) {
 				if (collider != trail_setter) {
-					let p1 = players[collider].plane.getObjectByName("left guide").getWorldPosition();
-					let p2 = players[collider].plane.getObjectByName("right guide").getWorldPosition();
+					let p1 = collider.plane.getObjectByName("left").getWorldPosition();
+					let p2 = collider.plane.getObjectByName("right").getWorldPosition();
 					if ( intersects(collision_data, p1, p2) ) {
-						console.log("Hit.", players[collider].id);
-						destroy_queue.push(players[collider]);
+						console.log("Hit.", collider.id);
+						destroy_queue.push(collider);
 						break; // Make sure player can only be added to "destroy_queue" once
 					}
 				}
