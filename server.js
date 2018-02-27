@@ -9,6 +9,7 @@ const REFRESH_TIME = 100; // Milliseconds between successive refreshes
 const TRAIL_LENGTH = 100; // Maximum number of rectangles in plane's trail
 const NORMAL_SPEED = 0.5;
 const FAST_SPEED = 3;
+const initial_gas = 1000;
 var cur_id = 0;
 var destroy_queue = [];
 
@@ -34,12 +35,13 @@ function Player() {
 	this.x_frac = 0;
 	this.y_frac = 0; // Horizontal mouse position
 	this.click = false, // Whether mouse is depressed
-	this.id = cur_id, // ID assigned to player
-	this.collision_data = [],
+	this.id = cur_id; // ID assigned to player
+	this.gas = initial_gas;
+	this.collision_data = [];
 	/* Change-of-basis matrix from {v1, v2, v3} to {e1, e2, e3}, where v1 and v2 are the sides of a trail square,
 	and v3 is their cross product.  Also includes the center point of the trail rectangle and a normal to the
 	trail rectangle. */
-	this.trail = [] // Coordinates of trail edges
+	this.trail = []; // Coordinates of trail edges
 	this.plane.position.set(
 		r * Math.sin(theta) * Math.cos(phi),
 		r * Math.sin(theta) * Math.sin(phi),
@@ -70,8 +72,10 @@ setInterval(update_world, REFRESH_TIME);
 
 function clear_destroyed_players() {
 	destroy_queue.forEach( function (player) {
-		io.emit("destroy", player.id);
-		players.delete(player.id);
+		if (players.has(player.id)) {
+			io.emit("destroy", player.id);
+			players.delete(player.id);
+		}
 	});
 	destroy_queue = [];
 }
@@ -81,6 +85,7 @@ function update_location( player ) {
 	player.plane.rotateY(-player.x_frac * speed);
 	player.plane.rotateX(player.y_frac * speed);
 	player.plane.translateZ(speed);
+	player.gas -= speed;
 	update_trail(player);
 }
 
@@ -89,16 +94,19 @@ function send_location( player ) {
 		id : player.id, 
 		pos : player.plane.getWorldPosition(),
 		rot : player.plane.rotation,
+		gas : player.gas,
 		trail : player.trail[TRAIL_LENGTH-1]
 	});
 }
 
 io.on("connection", function(socket) {
+	console.log("New connection.");
 	var new_player = new Player();
 	var msg = {
 		id : new_player.id,
 		pos : new_player.plane.position,
 		rot : new_player.plane.rotation,
+		gas : initial_gas,
 		trail : new_player.trail
 	};
 	socket.emit("id", msg);
@@ -119,6 +127,13 @@ io.on("connection", function(socket) {
 		}
 		else {
 			console.log("Data received from unknown player:", status);
+		}
+	});
+	var local_id = cur_id;
+	socket.on("disconnect", function() {
+		if (players.has(local_id)) {
+			io.emit("destroy", local_id);
+			players.delete(local_id);
 		}
 	});
 	players.set(cur_id, new_player);
@@ -147,9 +162,9 @@ function update_trail( player ) {
 	var new_right = player.plane.getObjectByName("right").getWorldPosition();
 	var old_left = player.trail[TRAIL_LENGTH-1].left;
 	var old_right = player.trail[TRAIL_LENGTH-1].right;
-	var v1 = new THREE.Vector3().copy( new_right );
+	var v1 = new THREE.Vector3().copy(new_right);
 	v1.sub(	new_left );
-	var v2 = new THREE.Vector3().copy( new_right );
+	var v2 = new THREE.Vector3().copy(new_right);
 	v2.sub( old_right );
 	var v3 = new THREE.Vector3(0, 0, 0);
 	v3.crossVectors(v1, v2); // If v1 and v2 are not parallel, then {v1, v2, v3} is a basis of R^3.

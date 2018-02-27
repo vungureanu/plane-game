@@ -22,6 +22,7 @@ const SPEED = 0.1;
 const SEND_INTERVAL = 100; // Milliseconds between successive send operations
 const OUTER_RADIUS = 500;
 const INNER_RADIUS = 50;
+const initial_gas = 1000;
 // Distance of mouse away from center, as fraction of the canvas's width or height
 var x_frac = 0;
 var y_frac = 0;
@@ -114,6 +115,7 @@ socket.on("update", function(status) {
 	};
 	add_trail(player, new_coords);
 	shorten_trail(player);
+	update_gas(status.gas);
 	renderer.render(scene, camera);
 });
 
@@ -249,7 +251,15 @@ function draw_background() {
 }
 draw_background();
 
+function update_gas(gas) {
+	gas_context.clearRect(0, 0, gas_bar.width, gas_bar.height);
+	gas_context.fillStyle = "rgb(0, 255, 0)";
+	gas_context.fillRect(0, 0, gas_bar.width * gas / initial_gas, gas_bar.height);
+}
+
 /* GAS BAR */
+
+
 
 gas_bar.style.top = game_height;
 gas_bar.width = window.innerWidth;
