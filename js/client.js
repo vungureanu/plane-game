@@ -1,6 +1,5 @@
 const scene = new THREE.Scene();
 const renderer = new THREE.WebGLRenderer( {canvas : document.getElementById("main_screen")} );
-console.log(renderer.domElement);
 var frac = 19 / 20;
 var game_height = window.innerHeight * frac;
 renderer.setSize( window.innerWidth, game_height );
@@ -64,15 +63,6 @@ function draw_plane( coords ) {
 	return plane;
 }
 
-var geometry = new THREE.SphereGeometry( OUTER_RADIUS, 32, 32 );
-var material = new THREE.MeshBasicMaterial( {color: 0x3399ff, side : THREE.BackSide} );
-var sphere = new THREE.Mesh( geometry, material );
-scene.add(sphere);
-var geometry = new THREE.SphereGeometry( INNER_RADIUS, 32, 32 );
-var material = new THREE.MeshBasicMaterial( {color: 0x00ff00} );
-var sphere = new THREE.Mesh( geometry, material );
-scene.add(sphere);
-
 // Adds a rectangle to a player's trail, removing oldest rectangle if necessary.
 function add_trail( player, new_coords ) {
 	var triangleGeometry = new THREE.Geometry();
@@ -107,7 +97,7 @@ camera.position.set(0, 0, -25);
 camera.lookAt(0, 0, 0);
 scene.add(plane_and_camera);
 
-// CLIENT-SERVER COMMUNICATION
+/* CLIENT-SERVER COMMUNICATION */
 
 function send_data() {
 	socket.emit("status", {
@@ -161,33 +151,22 @@ socket.on("id", function(status) {
 });
 
 socket.on("add", function(status) {
-	var plane = draw_plane();
-	var plane_container = new THREE.Group();
-	plane_container.add(plane);
-	plane_container.position.set(status.pos.x, status.pos.y, status.pos.z);
-	var outer_rot = new THREE.Euler(status.outer_rot._x, status.outer_rot._y, status.outer_rot._z, status.outer_rot._order);
-	var inner_rot = new THREE.Euler(status.inner_rot._x, status.inner_rot._y, status.inner_rot._z, status.inner_rot._order);
-	plane_container.setRotationFromEuler(outer_rot);
-	plane.setRotationFromEuler(inner_rot);
-	plane_container.updateMatrixWorld();
-	plane.updateMatrixWorld();
-	var left = plane.getObjectByName("left guide").getWorldPosition();
-	var right = plane.getObjectByName("right guide").getWorldPosition();
+	var plane_container = new PlaneContainer(status.pos, status.outer_rot, status.inner_rot);
+	//var plane = new Plane(status.pos, status.inner_rot);
 	players[status.id] = {
 		id : status.id,
 		plane_container : plane_container,
-		plane : plane,
+		plane : plane_container.plane,
 		trail : [],
-		old_coords : { left : left, right : right }
+		old_coords : plane_container.getCoords()
 	};
 	for ( var i = 0; i < TRAIL_LENGTH; i++ ) {
 		var new_coords = {
 			left : new THREE.Vector3( status.trail[i].left.x, status.trail[i].left.y, status.trail[i].left.z ),
 			right : new THREE.Vector3( status.trail[i].right.x, status.trail[i].right.y, status.trail[i].right.z )
 		};
-		add_trail(players[status.id], new_coords );
+		add_trail( players[status.id], new_coords );
 	}
-	scene.add(plane_container);
 });
 
 socket.on("destroy", function(id) {
@@ -204,9 +183,9 @@ socket.on("destroy", function(id) {
 	}
 });
 
-// CONTROLS
+/* CONTROLS */
 
-window.addEventListener('keypress', function(e) {
+/* window.addEventListener('keypress', function(e) {
 	if (e.keyCode == 65 || e.keyCode == 97) {
 		turn = -1;
 	}
@@ -218,7 +197,8 @@ window.addEventListener('keyup', function(e) {
 	if (e.keyCode == 65 || e.keyCode == 97 || e.keyCode == 68 || e.keyCode == 100) {
 		turn = 0;
 	}
-});
+}); */
+
 window.addEventListener('mousemove', function(e) {
 	x_frac = (e.clientX - window.innerWidth / 2) / window.innerWidth;
 	y_frac = (e.clientY - game_height / 2) / game_height;
@@ -236,6 +216,124 @@ window.addEventListener('mousedown', function() {
 window.addEventListener('mouseup', function() {
 	click = false;
 });
+
+/* GRAPHICS */
+
+function Plane(pos, rot) {
+	THREE.Object3D.call(this);
+	var geometry = new THREE.BoxGeometry( 1, 1, 20 );
+	var material = new THREE.MeshBasicMaterial( { color: 0x0000ff } );
+	var cube = new THREE.Mesh( geometry, material );
+	var geometry = new THREE.SphereGeometry( 2, 32, 32 );
+	var material = new THREE.MeshBasicMaterial( {color: 0xff00ff} );
+	var sphere = new THREE.Mesh( geometry, material );
+	var geometry = new THREE.BoxGeometry( 10, 1, 1 );
+	var material = new THREE.MeshBasicMaterial( { color: 0x0000ff } );
+	var cross = new THREE.Mesh( geometry, material );
+	var geometry = new THREE.SphereGeometry( 1, 32, 32 );
+	var material = new THREE.MeshBasicMaterial( {color: 0xff0000} );
+	var left_guide = new THREE.Mesh( geometry, material );
+	left_guide.name = "left guide";
+	var right_guide = new THREE.Mesh( geometry, material );
+	right_guide.name = "right guide";
+	sphere.position.set( 0, 0, 10 );
+	cross.position.set( 0, 0, 0 );
+	left_guide.position.set( 5, 0, 0 );
+	right_guide.position.set( -5, 0, 0 );
+	this.add(cube);
+	this.add(sphere);
+	this.add(cross);
+	this.add(left_guide);
+	this.add(right_guide);
+	this.position.set(pos.x, pos.y, pos.z);
+	this.setRotationFromEuler( new THREE.Euler(rot._x, rot._y, rot._z, rot._order) );
+	this.updateMatrixWorld();
+	scene.add(this);
+}
+
+Plane.prototype = new THREE.Object3D();
+Plane.prototype.constructor = Plane;
+Plane.prototype.getCoords = function() {
+	var left = this.getObjectByName("left guide").getWorldPosition();
+	var right = this.getObjectByName("right guide").getWorldPosition();
+	return { left : left, right : right };
+}
+
+function PlaneContainer(pos, outer_rot, inner_rot) {
+	THREE.Object3D.call(this);
+	this.plane = new THREE.Group();
+	var geometry = new THREE.BoxGeometry( 1, 1, 20 );
+	var material = new THREE.MeshBasicMaterial( { color: 0x0000ff } );
+	var cube = new THREE.Mesh( geometry, material );
+	var geometry = new THREE.SphereGeometry( 2, 32, 32 );
+	var material = new THREE.MeshBasicMaterial( {color: 0xff00ff} );
+	var sphere = new THREE.Mesh( geometry, material );
+	var geometry = new THREE.BoxGeometry( 10, 1, 1 );
+	var material = new THREE.MeshBasicMaterial( { color: 0x0000ff } );
+	var cross = new THREE.Mesh( geometry, material );
+	var geometry = new THREE.SphereGeometry( 1, 32, 32 );
+	var material = new THREE.MeshBasicMaterial( {color: 0xff0000} );
+	var left_guide = new THREE.Mesh( geometry, material );
+	left_guide.name = "left guide";
+	var right_guide = new THREE.Mesh( geometry, material );
+	right_guide.name = "right guide";
+	sphere.position.set( 0, 0, 10 );
+	cross.position.set( 0, 0, 0 );
+	left_guide.position.set( 5, 0, 0 );
+	right_guide.position.set( -5, 0, 0 );
+	this.plane.add(cube);
+	this.plane.add(sphere);
+	this.plane.add(cross);
+	this.plane.add(left_guide);
+	this.plane.add(right_guide);
+	this.add(this.plane);
+	this.position.set(pos.x, pos.y, pos.z);
+	var outer_rot = new THREE.Euler(outer_rot._x, outer_rot._y, outer_rot._z, outer_rot._order);
+	var inner_rot = new THREE.Euler(inner_rot._x, inner_rot._y, inner_rot._z, inner_rot._order);
+	this.setRotationFromEuler(outer_rot);
+	this.plane.setRotationFromEuler(inner_rot);
+	this.updateMatrixWorld();
+	this.plane.updateMatrixWorld();
+	scene.add(this);
+}
+
+PlaneContainer.prototype = new THREE.Object3D();
+PlaneContainer.prototype.constructor = PlaneContainer;
+PlaneContainer.prototype.getCoords = function() {
+	var left = this.plane.getObjectByName("left guide").getWorldPosition();
+	var right = this.plane.getObjectByName("right guide").getWorldPosition();
+	return { left : left, right : right };
+}
+
+function draw_background() {
+	var material = new THREE.MeshBasicMaterial( {color: 0xffffff} );
+	for (var i = 0; i < 100; i++) {
+		let radius = Math.random() * 3 + 1;
+		let geometry = new THREE.SphereGeometry(radius, 32, 32);
+		let r = Math.random() * 1000 + 300;
+		let theta = Math.random() * 2 * Math.PI;
+		let phi = Math.random() * Math.PI;
+		let star = new THREE.Mesh( geometry, material );
+		star.position.set(
+			r * Math.sin(theta) * Math.cos(phi),
+			r * Math.sin(theta) * Math.sin(phi),
+			r * Math.cos(theta)
+		);
+		scene.add(star);
+	}
+}
+draw_background();
+
+/* var geometry = new THREE.SphereGeometry( OUTER_RADIUS, 32, 32 );
+var material = new THREE.MeshBasicMaterial( {color: 0x3399ff, side : THREE.BackSide} );
+var sphere = new THREE.Mesh( geometry, material );
+scene.add(sphere);
+var geometry = new THREE.SphereGeometry( INNER_RADIUS, 32, 32 );
+var material = new THREE.MeshBasicMaterial( {color: 0x00ff00} );
+var sphere = new THREE.Mesh( geometry, material );
+scene.add(sphere); */
+
+/* GAS BAR */
 
 gas_bar.style.top = game_height;
 gas_bar.width = window.innerWidth;
