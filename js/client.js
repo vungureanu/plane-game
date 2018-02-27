@@ -26,10 +26,11 @@ const INNER_RADIUS = 50;
 var x_frac = 0;
 var y_frac = 0;
 var players = {}; // State (spatial coordinates and orientation) of all other players
-var turn = 0; // Clockwise or counterclockwise rotation in plane of screen.
 var click = false; // Whether mouse is depressed.
 var own_id;
 var send_data_id; // Identifies process sending data to server.
+var own_plane;
+var camera = new THREE.PerspectiveCamera( 75, window.innerWidth/game_height, 0.1, 1000 );
 
 /* GRAPHICS */
 
@@ -48,9 +49,9 @@ function draw_plane( coords ) {
 	var geometry = new THREE.SphereGeometry( 1, 32, 32 );
 	var material = new THREE.MeshBasicMaterial( {color: 0xff0000} );
 	var left_guide = new THREE.Mesh( geometry, material );
-	left_guide.name = "left guide";
+	left_guide.name = "left";
 	var right_guide = new THREE.Mesh( geometry, material );
-	right_guide.name = "right guide";
+	right_guide.name = "right";
 	sphere.position.set( 0, 0, 10 );
 	cross.position.set( 0, 0, 0 );
 	left_guide.position.set( 5, 0, 0 );
@@ -88,15 +89,6 @@ function shorten_trail( player ) {
 	player.trail.shift();
 }
 
-var plane_and_camera = new THREE.Group();
-var own_plane = draw_plane();
-var camera = new THREE.PerspectiveCamera( 75, window.innerWidth/game_height, 0.1, 1000 );
-plane_and_camera.add(own_plane);
-plane_and_camera.add(camera);
-camera.position.set(0, 0, -25);
-camera.lookAt(0, 0, 0);
-scene.add(plane_and_camera);
-
 /* CLIENT-SERVER COMMUNICATION */
 
 function send_data() {
@@ -104,7 +96,6 @@ function send_data() {
 		id : own_id,
 		x_frac : x_frac,
 		y_frac : y_frac,
-		turn : turn,
 		click : click
 	});
 }
@@ -112,12 +103,11 @@ function send_data() {
 send_data_id = setInterval(send_data, SEND_INTERVAL);
 
 socket.on("update", function(status) {
-	var outer_rot = new THREE.Euler(status.outer_rot._x, status.outer_rot._y, status.outer_rot._z, status.outer_rot._order);
-	var inner_rot = new THREE.Euler(status.inner_rot._x, status.inner_rot._y, status.inner_rot._z, status.inner_rot._order);
+	console.log("OK", status);
+	var rot = new THREE.Euler(status.rot._x, status.rot._y, status.rot._z, status.rot._order);
 	var player = players[status.id];
-	player.plane_container.setRotationFromEuler(outer_rot);
-	player.plane.setRotationFromEuler(inner_rot);
-	player.plane_container.position.set(status.pos.x, status.pos.y, status.pos.z);
+	player.plane.setRotationFromEuler(rot);
+	player.plane.position.set(status.pos.x, status.pos.y, status.pos.z);
 	var new_coords = {
 		left : new THREE.Vector3( status.trail.left.x, status.trail.left.y, status.trail.left.z ),
 		right : new THREE.Vector3( status.trail.right.x, status.trail.right.y, status.trail.right.z )
@@ -129,43 +119,33 @@ socket.on("update", function(status) {
 
 socket.on("id", function(status) {
 	own_id = status.id;
-	plane_and_camera.position.set(status.pos.x, status.pos.y, status.pos.z);
-	var outer_rot = new THREE.Euler(status.outer_rot._x, status.outer_rot._y, status.outer_rot._z, status.outer_rot._order);
-	var inner_rot = new THREE.Euler(status.inner_rot._x, status.inner_rot._y, status.inner_rot._z, status.inner_rot._order);
-	plane_and_camera.setRotationFromEuler(outer_rot);
-	own_plane.setRotationFromEuler(inner_rot);
-	plane_and_camera.updateMatrixWorld();
-	own_plane.updateMatrixWorld();
-	var left = own_plane.getObjectByName("left guide").getWorldPosition();
-	var right = own_plane.getObjectByName("right guide").getWorldPosition();
+	own_plane = new Plane(status.pos, status.rot, true);
+	var old_coords = own_plane.getCoords();
 	players[status.id] = {
 		id : status.id,
-		plane_container : plane_and_camera,
 		plane : own_plane,
 		trail : [],
-		old_coords : {left : left, right : right}
+		old_coords : old_coords
 	};
 	for ( var i = 0; i < TRAIL_LENGTH; i++ ) {
-		players[own_id].trail.push( {left : left, right : right} );
+		players[own_id].trail.push( old_coords );
 	}
 });
 
 socket.on("add", function(status) {
-	var plane_container = new PlaneContainer(status.pos, status.outer_rot, status.inner_rot);
-	//var plane = new Plane(status.pos, status.inner_rot);
+	var plane = new Plane(status.pos, status.rot, false);
 	players[status.id] = {
 		id : status.id,
-		plane_container : plane_container,
-		plane : plane_container.plane,
+		plane : plane,
 		trail : [],
-		old_coords : plane_container.getCoords()
+		old_coords : plane.getCoords()
 	};
 	for ( var i = 0; i < TRAIL_LENGTH; i++ ) {
 		var new_coords = {
 			left : new THREE.Vector3( status.trail[i].left.x, status.trail[i].left.y, status.trail[i].left.z ),
 			right : new THREE.Vector3( status.trail[i].right.x, status.trail[i].right.y, status.trail[i].right.z )
 		};
-		add_trail( players[status.id], new_coords );
+		add_trail(players[status.id], new_coords );
 	}
 });
 
@@ -174,7 +154,7 @@ socket.on("destroy", function(id) {
 		for ( square of players[id].trail ) {
 			scene.remove(square);
 		}
-		scene.remove(players[id].plane_container);
+		scene.remove(players[id].plane);
 		delete players[id];
 	}
 	if (id == own_id) {
@@ -184,20 +164,6 @@ socket.on("destroy", function(id) {
 });
 
 /* CONTROLS */
-
-/* window.addEventListener('keypress', function(e) {
-	if (e.keyCode == 65 || e.keyCode == 97) {
-		turn = -1;
-	}
-	if (e.keyCode == 68 || e.keyCode == 100) {
-		turn = 1;
-	}
-});
-window.addEventListener('keyup', function(e) {
-	if (e.keyCode == 65 || e.keyCode == 97 || e.keyCode == 68 || e.keyCode == 100) {
-		turn = 0;
-	}
-}); */
 
 window.addEventListener('mousemove', function(e) {
 	x_frac = (e.clientX - window.innerWidth / 2) / window.innerWidth;
@@ -219,7 +185,7 @@ window.addEventListener('mouseup', function() {
 
 /* GRAPHICS */
 
-function Plane(pos, rot) {
+function Plane(pos, rot, add_camera) {
 	THREE.Object3D.call(this);
 	var geometry = new THREE.BoxGeometry( 1, 1, 20 );
 	var material = new THREE.MeshBasicMaterial( { color: 0x0000ff } );
@@ -233,9 +199,9 @@ function Plane(pos, rot) {
 	var geometry = new THREE.SphereGeometry( 1, 32, 32 );
 	var material = new THREE.MeshBasicMaterial( {color: 0xff0000} );
 	var left_guide = new THREE.Mesh( geometry, material );
-	left_guide.name = "left guide";
+	left_guide.name = "left";
 	var right_guide = new THREE.Mesh( geometry, material );
-	right_guide.name = "right guide";
+	right_guide.name = "right";
 	sphere.position.set( 0, 0, 10 );
 	cross.position.set( 0, 0, 0 );
 	left_guide.position.set( 5, 0, 0 );
@@ -245,6 +211,11 @@ function Plane(pos, rot) {
 	this.add(cross);
 	this.add(left_guide);
 	this.add(right_guide);
+	if (add_camera == true) {
+		this.add(camera);
+		camera.position.set(0, 0, -25);
+		camera.lookAt(0, 0, 0);
+	}
 	this.position.set(pos.x, pos.y, pos.z);
 	this.setRotationFromEuler( new THREE.Euler(rot._x, rot._y, rot._z, rot._order) );
 	this.updateMatrixWorld();
@@ -254,54 +225,8 @@ function Plane(pos, rot) {
 Plane.prototype = new THREE.Object3D();
 Plane.prototype.constructor = Plane;
 Plane.prototype.getCoords = function() {
-	var left = this.getObjectByName("left guide").getWorldPosition();
-	var right = this.getObjectByName("right guide").getWorldPosition();
-	return { left : left, right : right };
-}
-
-function PlaneContainer(pos, outer_rot, inner_rot) {
-	THREE.Object3D.call(this);
-	this.plane = new THREE.Group();
-	var geometry = new THREE.BoxGeometry( 1, 1, 20 );
-	var material = new THREE.MeshBasicMaterial( { color: 0x0000ff } );
-	var cube = new THREE.Mesh( geometry, material );
-	var geometry = new THREE.SphereGeometry( 2, 32, 32 );
-	var material = new THREE.MeshBasicMaterial( {color: 0xff00ff} );
-	var sphere = new THREE.Mesh( geometry, material );
-	var geometry = new THREE.BoxGeometry( 10, 1, 1 );
-	var material = new THREE.MeshBasicMaterial( { color: 0x0000ff } );
-	var cross = new THREE.Mesh( geometry, material );
-	var geometry = new THREE.SphereGeometry( 1, 32, 32 );
-	var material = new THREE.MeshBasicMaterial( {color: 0xff0000} );
-	var left_guide = new THREE.Mesh( geometry, material );
-	left_guide.name = "left guide";
-	var right_guide = new THREE.Mesh( geometry, material );
-	right_guide.name = "right guide";
-	sphere.position.set( 0, 0, 10 );
-	cross.position.set( 0, 0, 0 );
-	left_guide.position.set( 5, 0, 0 );
-	right_guide.position.set( -5, 0, 0 );
-	this.plane.add(cube);
-	this.plane.add(sphere);
-	this.plane.add(cross);
-	this.plane.add(left_guide);
-	this.plane.add(right_guide);
-	this.add(this.plane);
-	this.position.set(pos.x, pos.y, pos.z);
-	var outer_rot = new THREE.Euler(outer_rot._x, outer_rot._y, outer_rot._z, outer_rot._order);
-	var inner_rot = new THREE.Euler(inner_rot._x, inner_rot._y, inner_rot._z, inner_rot._order);
-	this.setRotationFromEuler(outer_rot);
-	this.plane.setRotationFromEuler(inner_rot);
-	this.updateMatrixWorld();
-	this.plane.updateMatrixWorld();
-	scene.add(this);
-}
-
-PlaneContainer.prototype = new THREE.Object3D();
-PlaneContainer.prototype.constructor = PlaneContainer;
-PlaneContainer.prototype.getCoords = function() {
-	var left = this.plane.getObjectByName("left guide").getWorldPosition();
-	var right = this.plane.getObjectByName("right guide").getWorldPosition();
+	var left = this.getObjectByName("left").getWorldPosition();
+	var right = this.getObjectByName("right").getWorldPosition();
 	return { left : left, right : right };
 }
 
@@ -323,15 +248,6 @@ function draw_background() {
 	}
 }
 draw_background();
-
-/* var geometry = new THREE.SphereGeometry( OUTER_RADIUS, 32, 32 );
-var material = new THREE.MeshBasicMaterial( {color: 0x3399ff, side : THREE.BackSide} );
-var sphere = new THREE.Mesh( geometry, material );
-scene.add(sphere);
-var geometry = new THREE.SphereGeometry( INNER_RADIUS, 32, 32 );
-var material = new THREE.MeshBasicMaterial( {color: 0x00ff00} );
-var sphere = new THREE.Mesh( geometry, material );
-scene.add(sphere); */
 
 /* GAS BAR */
 

@@ -26,40 +26,33 @@ app.get("/js/client.js", function(req, res) {
 	res.sendFile(__dirname + "/js/client.js");
 });
 
-function create_new_player() {
+function Player() {
 	var r = Math.random() * (OUTER_RADIUS-INNER_RADIUS) + INNER_RADIUS;
 	var theta = Math.random() * Math.PI;
 	var phi = Math.random() * Math.PI - Math.PI / 2;
-	var new_player = {
-		plane : draw_plane(), // Plane
-		x_frac : 0, // Horizontal mouse position
-		y_frac : 0, // Vertical mouse position
-		turn : 0, // -1 indicates that the "a" key has been pressed, 1 that the "d" key has been pressed, and 0 that neither has been pressed. 
-		click : false, // Whether mouse is depressed
-		id : cur_id, // ID assigned to player
-		plane_container : new THREE.Group(), // Group containing only "plane".
-		collision_data : [],
-		/* Change-of-basis matrix from {v1, v2, v3} to {e1, e2, e3}, where v1 and v2 are the sides of a trail square,
-		and v3 is their cross product.  Also includes the center point of the trail rectangle and a normal to the
-		trail rectangle. */
-		trail : [] // Coordinates of trail edges
-	};
-	new_player.plane_container.add(new_player.plane);
-	new_player.plane_container.position.set(
+	this.plane = draw_plane(); // Plane
+	this.x_frac = 0;
+	this.y_frac = 0; // Horizontal mouse position
+	this.click = false, // Whether mouse is depressed
+	this.id = cur_id, // ID assigned to player
+	this.collision_data = [],
+	/* Change-of-basis matrix from {v1, v2, v3} to {e1, e2, e3}, where v1 and v2 are the sides of a trail square,
+	and v3 is their cross product.  Also includes the center point of the trail rectangle and a normal to the
+	trail rectangle. */
+	this.trail = [] // Coordinates of trail edges
+	this.plane.position.set(
 		r * Math.sin(theta) * Math.cos(phi),
 		r * Math.sin(theta) * Math.sin(phi),
 		r * Math.cos(theta)
 	);
-	new_player.plane_container.updateMatrixWorld();
-	new_player.plane.updateMatrixWorld();
+	this.plane.updateMatrixWorld();
 	var lr_coords = {
-		left : new_player.plane.getObjectByName("left guide").getWorldPosition(),
-		right : new_player.plane.getObjectByName("right guide").getWorldPosition()
+		left : this.plane.getObjectByName("left guide").getWorldPosition(),
+		right : this.plane.getObjectByName("right guide").getWorldPosition()
 	}
 	for (var i = 0; i < TRAIL_LENGTH; i++) {
-		new_player.trail.push(lr_coords);
+		this.trail.push(lr_coords);
 	}
-	return new_player;
 }
 
 function update_world() {
@@ -85,30 +78,27 @@ function clear_destroyed_players() {
 
 function update_location( player ) {
 	var speed = player.click ? FAST_SPEED : NORMAL_SPEED;
-	player.plane_container.rotateY(-player.x_frac * speed);
-	player.plane_container.rotateX(player.y_frac * speed);
-	player.plane.rotateZ(player.turn * speed);
-	player.plane_container.translateZ(speed);
+	player.plane.rotateY(-player.x_frac * speed);
+	player.plane.rotateX(player.y_frac * speed);
+	player.plane.translateZ(speed);
 	update_trail(player);
 }
 
 function send_location( player ) {
 	io.emit("update", {
 		id : player.id, 
-		pos : player.plane_container.getWorldPosition(),
-		outer_rot : player.plane_container.rotation,
-		inner_rot : player.plane.rotation,
+		pos : player.plane.getWorldPosition(),
+		rot : player.plane.rotation,
 		trail : player.trail[TRAIL_LENGTH-1]
 	});
 }
 
 io.on("connection", function(socket) {
-	var new_player = create_new_player();
+	var new_player = new Player();
 	var msg = {
 		id : new_player.id,
-		pos : new_player.plane_container.position,
-		outer_rot : new_player.plane_container.rotation,
-		inner_rot : new_player.plane.rotation,
+		pos : new_player.plane.position,
+		rot : new_player.plane.rotation,
 		trail : new_player.trail
 	};
 	socket.emit("id", msg);
@@ -116,17 +106,16 @@ io.on("connection", function(socket) {
 	for (var id in players) {
 		socket.emit("add", {
 			id : players[id].id,
-			pos : players[id].plane_container.getWorldPosition(),
-			outer_rot : players[id].plane_container.rotation,
-			inner_rot : players[id].plane.rotation,
+			pos : players[id].plane.getWorldPosition(),
+			rot : players[id].plane.rotation,
 			trail : players[id].trail
 		});
 	}
 	socket.on("status", function(status) {
+		console.log("S", status);
 		if ( status.id in players ) {
 			players[status.id].x_frac = status.x_frac;
 			players[status.id].y_frac = status.y_frac;
-			players[status.id].turn = status.turn;
 			players[status.id].click = status.click;
 		}
 		else {
@@ -140,12 +129,12 @@ io.on("connection", function(socket) {
 /* GRAPHICS */
 
 function draw_plane() {
-	var plane = new THREE.Group();
-	var geometry = new THREE.SphereGeometry( 1, 32, 32 );
+	var plane = new THREE.Object3D();
+	var geometry = new THREE.SphereGeometry(1, 32, 32);
 	var material = new THREE.MeshBasicMaterial( {color: 0xff0000} );
-	var left_guide = new THREE.Mesh( geometry, material );
+	var left_guide = new THREE.Mesh(geometry, material);
 	left_guide.name = "left guide";
-	var right_guide = new THREE.Mesh( geometry, material );
+	var right_guide = new THREE.Mesh(geometry, material);
 	right_guide.name = "right guide";
 	left_guide.position.set( 5, 0, 0 );
 	right_guide.position.set( -5, 0, 0 );
