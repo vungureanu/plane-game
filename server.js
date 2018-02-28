@@ -86,6 +86,9 @@ function update_location( player ) {
 	player.plane.rotateX(player.y_frac * speed);
 	player.plane.translateZ(speed);
 	player.gas -= speed;
+	if (player.plane.position.length() <= INNER_RADIUS) {
+		player.gas = initial_gas;
+	}
 	update_trail(player);
 }
 

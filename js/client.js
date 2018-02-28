@@ -257,6 +257,20 @@ function update_gas(gas) {
 	gas_context.fillRect(0, 0, gas_bar.width * gas / initial_gas, gas_bar.height);
 }
 
+function draw_sun() {
+	var material = new THREE.MeshBasicMaterial( {
+		color: 0xffff11,
+		transparent: true,
+		opacity: 0.5,
+		side: THREE.DoubleSide
+	});
+	var geometry = new THREE.SphereGeometry(INNER_RADIUS, 32, 32);
+	var sun = new THREE.Mesh(geometry, material);
+	sun.renderOrder = 1;
+	scene.add(sun);
+}
+draw_sun();
+
 /* GAS BAR */
 
 
