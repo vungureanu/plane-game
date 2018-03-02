@@ -3,15 +3,19 @@ var http = require("http").createServer(app);
 var io = require("socket.io")(http);
 var THREE = require("three");
 var players = new Map();
-const OUTER_RADIUS = 200;
-const INNER_RADIUS = 50;
+const outer_radius = 1000;
+const center = new THREE.Vector3(outer_radius, outer_radius, outer_radius);
+const inner_radius = 50;
 const REFRESH_TIME = 100; // Milliseconds between successive refreshes
-const TRAIL_LENGTH = 100; // Maximum number of rectangles in plane's trail
+const trail_length = 100; // Maximum number of rectangles in plane's trail
 const NORMAL_SPEED = 0.5;
 const FAST_SPEED = 3;
+const TURN_SPEED = 0.25;
+var cell_dim = 50; // Side length of cubes into which space is partitioned for collision detection purposes
 const initial_gas = 1000;
 var cur_id = 0;
-var destroy_queue = [];
+var cells;
+var n = 2 * Math.ceil(outer_radius/cell_dim); // Number of cubes per side
 
 http.listen(3000, function(){
 	console.log('listening on *:3000');
@@ -28,14 +32,14 @@ app.get("/js/client.js", function(req, res) {
 });
 
 function Player() {
-	var r = Math.random() * (OUTER_RADIUS-INNER_RADIUS) + INNER_RADIUS;
+	var r = Math.random() * (200-inner_radius) + inner_radius;
 	var theta = Math.random() * Math.PI;
 	var phi = Math.random() * Math.PI - Math.PI / 2;
 	this.plane = draw_plane(); // Plane
 	this.x_frac = 0;
 	this.y_frac = 0; // Horizontal mouse position
 	this.click = false, // Whether mouse is depressed
-	this.id = cur_id; // ID assigned to player
+	this.player_id = cur_id; // ID assigned to player
 	this.gas = initial_gas;
 	this.collision_data = [];
 	/* Change-of-basis matrix from {v1, v2, v3} to {e1, e2, e3}, where v1 and v2 are the sides of a trail square,
@@ -47,22 +51,26 @@ function Player() {
 		r * Math.sin(theta) * Math.sin(phi),
 		r * Math.cos(theta)
 	);
+	this.plane.position.addScalar(outer_radius);
 	this.plane.updateMatrixWorld();
 	var lr_coords = {
-		left : this.plane.getObjectByName("left").getWorldPosition(),
-		right : this.plane.getObjectByName("right").getWorldPosition()
+		left : this.plane.left_guide.getWorldPosition().sub(new THREE.Vector3(0, 0, 1)), // Not an important addition -- it just ensures that the first matrix in "collision_data" is invertible, and so avoids a warning. 
+		right : this.plane.right_guide.getWorldPosition().sub(new THREE.Vector3(0, 0, 1))
 	}
-	for (var i = 0; i < TRAIL_LENGTH; i++) {
+	this.cell = get_cell(this.plane.position);
+	this.cell.planes.add(cur_id);
+	for (var i = 0; i < trail_length-1; i++) {
 		this.trail.push(lr_coords);
+		this.collision_data.push( {normal: new THREE.Vector3(0, 0, 0), cell: this.cell} );
 	}
+	this.trail.push(lr_coords);
 }
 
 function update_world() {
 	for ( var player of players.values() ) {
 		update_location(player);
 		send_location(player);
-		check_collisions();
-		clear_destroyed_players();
+		check_collisions(player);
 	}
 }
 
@@ -70,56 +78,71 @@ setInterval(update_world, REFRESH_TIME);
 
 /* SOCKET */
 
-function clear_destroyed_players() {
-	destroy_queue.forEach( function (player) {
-		if (players.has(player.id)) {
-			io.emit("destroy", player.id);
-			players.delete(player.id);
-		}
-	});
-	destroy_queue = [];
+function destroy_player(player, reason) {
+	if (players.has(player.player_id)) {
+		console.log("Destroying", player.player_id, "because of", reason);
+		io.emit("destroy", {id : player.player_id, reason : reason} );
+		players.delete(player.player_id);
+	}
+	else {
+		console.log("Attempt to delete non-existent player:", player.player_id);
+	}
 }
 
 function update_location( player ) {
 	var speed = player.click ? FAST_SPEED : NORMAL_SPEED;
-	player.plane.rotateY(-player.x_frac * speed);
-	player.plane.rotateX(player.y_frac * speed);
+	player.plane.rotateY(-player.x_frac * speed * TURN_SPEED);
+	player.plane.rotateX(player.y_frac * speed * TURN_SPEED);
 	player.plane.translateZ(speed);
+	player.plane.updateMatrixWorld();
+	//
+	player.cell.planes.delete(player.player_id);
+	player.cell = get_cell(player.plane.position);
+	player.cell.planes.add(player.player_id);
+	//
 	player.gas -= speed;
-	if (player.plane.position.length() <= INNER_RADIUS) {
+	if (player.plane.position.distanceToSquared(center) <= inner_radius * inner_radius) {
 		player.gas = initial_gas;
+	}
+	if (player.gas <= 0) {
+		destroy_player(player, "gas");
 	}
 	update_trail(player);
 }
 
-function send_location( player ) {
+function send_location(player) {
 	io.emit("update", {
-		id : player.id, 
-		pos : player.plane.getWorldPosition(),
-		rot : player.plane.rotation,
-		gas : player.gas,
-		trail : player.trail[TRAIL_LENGTH-1]
+		id: player.player_id, 
+		pos: player.plane.getWorldPosition(),
+		rot: player.plane.rotation,
+		gas: player.gas
 	});
 }
 
 io.on("connection", function(socket) {
 	console.log("New connection.");
+	socket.emit("config", {
+		initial_gas: initial_gas,
+		trail_length: trail_length,
+		inner_radius: inner_radius,
+		outer_radius: outer_radius
+	});
 	var new_player = new Player();
 	var msg = {
-		id : new_player.id,
-		pos : new_player.plane.position,
-		rot : new_player.plane.rotation,
-		gas : initial_gas,
-		trail : new_player.trail
+		id: new_player.player_id,
+		pos: new_player.plane.position,
+		rot: new_player.plane.rotation,
+		gas: initial_gas,
+		trail: new_player.trail
 	};
 	socket.emit("id", msg);
 	socket.broadcast.emit("add", msg);
 	for (var player of players.values()) {
 		socket.emit("add", {
-			id : player.id,
-			pos : player.plane.getWorldPosition(),
-			rot : player.plane.rotation,
-			trail : player.trail
+			id: player.player_id,
+			pos: player.plane.getWorldPosition(),
+			rot: player.plane.rotation,
+			trail: player.trail
 		});
 	}
 	socket.on("status", function(status) {
@@ -132,13 +155,7 @@ io.on("connection", function(socket) {
 			console.log("Data received from unknown player:", status);
 		}
 	});
-	var local_id = cur_id;
-	socket.on("disconnect", function() {
-		if (players.has(local_id)) {
-			io.emit("destroy", local_id);
-			players.delete(local_id);
-		}
-	});
+	socket.on("disconnect", () => destroy_player(new_player, "disconnection"));
 	players.set(cur_id, new_player);
 	cur_id += 1;
 });
@@ -147,64 +164,65 @@ io.on("connection", function(socket) {
 
 function draw_plane() {
 	var plane = new THREE.Object3D();
-	var geometry = new THREE.SphereGeometry(1, 32, 32);
-	var material = new THREE.MeshBasicMaterial( {color: 0xff0000} );
-	var left_guide = new THREE.Mesh(geometry, material);
-	left_guide.name = "left";
-	var right_guide = new THREE.Mesh(geometry, material);
-	right_guide.name = "right";
-	left_guide.position.set( 5, 0, 0 );
-	right_guide.position.set( -5, 0, 0 );
-	plane.add(left_guide);
-	plane.add(right_guide);
+	plane.left_guide = new THREE.Object3D();
+	plane.right_guide = new THREE.Object3D();
+	plane.left_guide.position.set(5, 0, 0);
+	plane.right_guide.position.set(-5, 0, 0);
+	plane.add(plane.left_guide);
+	plane.add(plane.right_guide);
 	return plane;
 }
 
-function update_trail( player ) {
-	var new_left = player.plane.getObjectByName("left").getWorldPosition();
-	var new_right = player.plane.getObjectByName("right").getWorldPosition();
-	var old_left = player.trail[TRAIL_LENGTH-1].left;
-	var old_right = player.trail[TRAIL_LENGTH-1].right;
-	var v1 = new THREE.Vector3().copy(new_right);
-	v1.sub(	new_left );
-	var v2 = new THREE.Vector3().copy(new_right);
-	v2.sub( old_right );
-	var v3 = new THREE.Vector3(0, 0, 0);
-	v3.crossVectors(v1, v2); // If v1 and v2 are not parallel, then {v1, v2, v3} is a basis of R^3.
+function update_trail(player) {
+	player.collision_data[0].cell.trails.delete(player.collision_data[0]);
+	player.collision_data.shift();
+	var new_left = player.plane.left_guide.getWorldPosition();
+	var new_right = player.plane.right_guide.getWorldPosition();
+	var old_left = player.trail[trail_length-1].left;
+	var old_right = player.trail[trail_length-1].right;
+	var v1 = new_left.clone();
+	v1.sub(old_left);
+	var v2 = old_right.clone();
+	v2.sub(old_left);
+	var v3 = new THREE.Vector3().crossVectors(v1, v2); // If v1 and v2 are not parallel, then {v1, v2, v3} is a basis of R^3.
+	v3.normalize(); // Not necessary
 	var matrix = new THREE.Matrix3();
 	matrix.set( 
-		new_right.x - new_left.x, new_right.x - old_right.x, v3.x,
-		new_right.y - new_left.y, new_right.y - old_right.y, v3.y,
-		new_right.z - new_left.z, new_right.z - old_right.z, v3.z
+		new_left.x - old_left.x, old_right.x - old_left.x, v3.x,
+		new_left.y - old_left.y, old_right.y - old_left.y, v3.y,
+		new_left.z - old_left.z, old_right.z - old_left.z, v3.z
 	);
 	try {
 		matrix = matrix.getInverse(matrix, true);
 	}
 	catch(e) {
-		console.log("Matrix not invertible:", old_right, new_left, new_right);
+		console.log("Matrix not invertible:", matrix);
 	}
+	var center = new_left.clone();
+	center.addScaledVector(v1, 0.5);
+	center.addScaledVector(v2, 0.5);
+	var cell = get_cell(center);
 	var collision_data = {
-		matrix : matrix,
-		normal : v3,
-		point : old_left
-	}
-	if (player.collision_data.length == TRAIL_LENGTH-1) {
-		player.collision_data.shift();
-	}
+		matrix: matrix,
+		normal: v3,
+		point: center,
+		id: player.player_id,
+		cell: cell
+	};
+	cell.trails.add(collision_data);
 	player.collision_data.push(collision_data);
-	player.trail.push( {left : new_left, right : new_right} );
+	player.trail.push( {left: new_left, right: new_right, cell: cell} );
 	player.trail.shift();
 }
 
 /* INTERSECTION DETECTION */
 
-
-/* Checks whether the line segment from "p1" to "p2" intersects the plane section given by "matrix".
-The idea is that "matrix" represents a linear transformation which maps the trail rectangle to the unit square
-([0, 1] x [0, 1] x {0}).  We need only check whether a point lying within the plane containing the trail
+/* Checks whether the line segment from "p1" to "p2" intersects the planar section given by "matrix".
+The idea is that "matrix" represents a linear transformation which maps its associated trail rectangle to the unit
+square ([0, 1] x [0, 1] x {0}).  We need only check whether a point lying within the plane containing the trail
 rectangle is mapped to the unit square. */
 
-function intersects( collision_data, p1, p2 ) {
+function intersects(collision_data, p1, p2) {
 	// Find intersection between line passing through "p1" and "p2" and plane given by "collision_data".
 	var v = p2.clone();
 	v.sub(p1);
@@ -230,22 +248,54 @@ function intersects( collision_data, p1, p2 ) {
 	return false;
 }
 
-function check_collisions() {
-	for ( var trail_setter of players.values() ) {
-		for ( var collision_data of trail_setter.collision_data ) {
-			for ( var collider of players.values() ) {
-				if (collider != trail_setter) {
-					let p1 = collider.plane.getObjectByName("left").getWorldPosition();
-					let p2 = collider.plane.getObjectByName("right").getWorldPosition();
-					if ( intersects(collision_data, p1, p2) ) {
-						console.log("Hit.", collider.id);
-						destroy_queue.push(collider);
-						break; // Make sure player can only be added to "destroy_queue" once
-					}
+function check_collisions(player) {
+	neighbors = get_neighbors(player.cell);
+	for (var neighbor of neighbors) {
+		for (var collision_data of neighbor.trails) {
+			if ( collision_data.id != player.player_id && intersects(collision_data, player.plane.left_guide.getWorldPosition(), player.plane.right_guide.getWorldPosition()) ) {
+				console.log(player.player_id, "hit", collision_data.id);
+				destroy_player(player, "collision");
+				return true;
+			}
+		}
+	}
+}
+
+function get_neighbors(cell) {
+	var neighbors = [];
+	for (var i = -1; i < 2; i++) {
+		for (var j = -1; j < 2; j++) {
+			for (var k = -1; k < 2; k++) {
+				if (cell.x + i >= 0 && cell.x + i < n && cell.y + j >= 0 && cell.y + j < n && cell.z + k >= 0 && cell.z + k) {
+					neighbors.push(cells[cell.x + i][cell.y + j][cell.z + k]);
 				}
 			}
 		}
 	}
+	return neighbors;
+}
+
+function initialize_cells() {
+	cells = new Array(n);
+	for (let i = 0; i < n; i++) {
+		cells[i] = new Array(n);
+		for (let j = 0; j < n; j++) {
+			cells[i][j] = new Array(n);
+			for (let k = 0; k < n; k++) {
+				cells[i][j][k] = { planes: new Set(), trails: new Set(), x: i, y: j, z: k };
+			}
+		}
+	}
+}
+initialize_cells();
+
+/* MISCELLANEOUS */
+
+function get_cell(v) {
+	var x =  Math.floor(v.x / cell_dim);
+	var	y = Math.floor(v.y / cell_dim);
+	var	z = Math.floor(v.z / cell_dim);
+	return cells[x][y][z];
 }
 
 /* var m = new THREE.Matrix3();
