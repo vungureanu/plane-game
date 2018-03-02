@@ -249,8 +249,7 @@ function intersects(collision_data, p1, p2) {
 }
 
 function check_collisions(player) {
-	neighbors = get_neighbors(player.cell);
-	for (var neighbor of neighbors) {
+	for (var neighbor of player.cell.neighbors) {
 		for (var collision_data of neighbor.trails) {
 			if ( collision_data.id != player.player_id && intersects(collision_data, player.plane.left_guide.getWorldPosition(), player.plane.right_guide.getWorldPosition()) ) {
 				console.log(player.player_id, "hit", collision_data.id);
@@ -261,13 +260,13 @@ function check_collisions(player) {
 	}
 }
 
-function get_neighbors(cell) {
-	var neighbors = [];
-	for (var i = -1; i < 2; i++) {
-		for (var j = -1; j < 2; j++) {
-			for (var k = -1; k < 2; k++) {
-				if (cell.x + i >= 0 && cell.x + i < n && cell.y + j >= 0 && cell.y + j < n && cell.z + k >= 0 && cell.z + k) {
-					neighbors.push(cells[cell.x + i][cell.y + j][cell.z + k]);
+function get_neighbors(x, y, z) {
+	var neighbors = new Set();
+	for (var i of [-1, 0, 1]) {
+		for (var j of [-1, 0, 1]) {
+			for (var k of [-1, 0, 1]) {
+				if (x + i >= 0 && x + i < n && y + j >= 0 && y + j < n && z + k >= 0 && z + k < n) {
+					neighbors.add(cells[x + i][y + j][z + k]);
 				}
 			}
 		}
@@ -282,7 +281,14 @@ function initialize_cells() {
 		for (let j = 0; j < n; j++) {
 			cells[i][j] = new Array(n);
 			for (let k = 0; k < n; k++) {
-				cells[i][j][k] = { planes: new Set(), trails: new Set(), x: i, y: j, z: k };
+				cells[i][j][k] = { planes: new Set(), trails: new Set() };
+			}
+		}
+	}
+	for (let i = 0; i < n; i++) {
+		for (let j = 0; j < n; j++) {
+			for (let k = 0; k < n; k++) {
+				cells[i][j][k].neighbors = get_neighbors(i, j, k);
 			}
 		}
 	}

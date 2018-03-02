@@ -1,6 +1,6 @@
 const scene = new THREE.Scene();
-const renderer = new THREE.WebGLRenderer( {canvas : document.getElementById("main_screen")} );
-var frac = 19 / 20;
+const renderer = new THREE.WebGLRenderer( {canvas: document.getElementById("main_screen")} );
+const frac = 19 / 20; // Proportion of screen width taken up by main game
 var game_height = window.innerHeight * frac;
 renderer.setSize( window.innerWidth, game_height );
 const gas_bar = document.getElementById("gasBar");
