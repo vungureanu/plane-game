@@ -12,7 +12,7 @@ const NORMAL_SPEED = 0.5;
 const FAST_SPEED = 3;
 const TURN_SPEED = 0.25;
 var cell_dim = 50; // Side length of cubes into which space is partitioned for collision detection purposes
-const initial_gas = 1000;
+const initial_gas = 100;
 var cur_id = 0;
 var cells;
 var n = 2 * Math.ceil(outer_radius/cell_dim); // Number of cubes per side
@@ -31,15 +31,15 @@ app.get("/js/client.js", function(req, res) {
 	res.sendFile(__dirname + "/js/client.js");
 });
 
-function Player() {
+function Player(player_id) {
 	var r = Math.random() * (200-inner_radius) + inner_radius;
 	var theta = Math.random() * Math.PI;
 	var phi = Math.random() * Math.PI - Math.PI / 2;
-	this.plane = draw_plane(); // Plane
+	this.plane = draw_plane();
 	this.x_frac = 0;
 	this.y_frac = 0; // Horizontal mouse position
 	this.click = false, // Whether mouse is depressed
-	this.player_id = cur_id; // ID assigned to player
+	this.player_id = player_id; // ID assigned to player
 	this.gas = initial_gas;
 	this.collision_data = [];
 	/* Change-of-basis matrix from {v1, v2, v3} to {e1, e2, e3}, where v1 and v2 are the sides of a trail square,
@@ -54,9 +54,9 @@ function Player() {
 	this.plane.position.addScalar(outer_radius);
 	this.plane.updateMatrixWorld();
 	var lr_coords = {
-		left : this.plane.left_guide.getWorldPosition().sub(new THREE.Vector3(0, 0, 1)), // Not an important addition -- it just ensures that the first matrix in "collision_data" is invertible, and so avoids a warning. 
-		right : this.plane.right_guide.getWorldPosition().sub(new THREE.Vector3(0, 0, 1))
-	}
+		left : this.plane.left_guide.getWorldPosition(),
+		right : this.plane.right_guide.getWorldPosition()
+	};
 	this.cell = get_cell(this.plane.position);
 	this.cell.planes.add(cur_id);
 	for (var i = 0; i < trail_length-1; i++) {
@@ -78,14 +78,19 @@ setInterval(update_world, REFRESH_TIME);
 
 /* SOCKET */
 
-function destroy_player(player, reason) {
-	if (players.has(player.player_id)) {
-		console.log("Destroying", player.player_id, "because of", reason);
-		io.emit("destroy", {id : player.player_id, reason : reason} );
-		players.delete(player.player_id);
+function destroy_player(id, reason) {
+	if ( players.has(id) ) {
+		let player = players.get(id);
+		console.log("Destroying", id, "because of", reason);
+		io.emit("destroy", {id : id, reason : reason} );
+		for (var collision_data of player.collision_data) {
+			collision_data.cell.trails.delete(collision_data);
+		}
+		player.cell.planes.delete(id);
+		players.delete(id);
 	}
 	else {
-		console.log("Attempt to delete non-existent player:", player.player_id);
+		console.log("Attempt to delete non-existent player:", id);
 	}
 }
 
@@ -105,7 +110,7 @@ function update_location( player ) {
 		player.gas = initial_gas;
 	}
 	if (player.gas <= 0) {
-		destroy_player(player, "gas");
+		destroy_player(player.player_id, "gas");
 	}
 	update_trail(player);
 }
@@ -120,31 +125,36 @@ function send_location(player) {
 }
 
 io.on("connection", function(socket) {
-	console.log("New connection.");
-	socket.emit("config", {
-		initial_gas: initial_gas,
-		trail_length: trail_length,
-		inner_radius: inner_radius,
-		outer_radius: outer_radius
-	});
-	var new_player = new Player();
-	var msg = {
-		id: new_player.player_id,
-		pos: new_player.plane.position,
-		rot: new_player.plane.rotation,
-		gas: initial_gas,
-		trail: new_player.trail
-	};
-	socket.emit("id", msg);
-	socket.broadcast.emit("add", msg);
-	for (var player of players.values()) {
-		socket.emit("add", {
-			id: player.player_id,
-			pos: player.plane.getWorldPosition(),
-			rot: player.plane.rotation,
-			trail: player.trail
+	var player_id = cur_id;
+	cur_id++;
+	console.log("New connection from", socket.handshake.address);
+	socket.on("start", function() {
+		socket.emit("config", {
+			initial_gas: initial_gas,
+			trail_length: trail_length,
+			inner_radius: inner_radius,
+			outer_radius: outer_radius
 		});
-	}
+		new_player = new Player(player_id);
+		var msg = {
+			id: new_player.player_id,
+			pos: new_player.plane.position,
+			rot: new_player.plane.rotation,
+			gas: initial_gas,
+			trail: new_player.trail
+		};
+		socket.emit("id", msg);
+		socket.broadcast.emit("add", msg);
+		for (var player of players.values()) {
+			socket.emit("add", {
+				id: player.player_id,
+				pos: player.plane.getWorldPosition(),
+				rot: player.plane.rotation,
+				trail: player.trail
+			});
+		}
+		players.set(player_id, new_player);
+	});
 	socket.on("status", function(status) {
 		if ( players.has(status.id) ) {
 			players.get(status.id).x_frac = status.x_frac;
@@ -155,9 +165,7 @@ io.on("connection", function(socket) {
 			console.log("Data received from unknown player:", status);
 		}
 	});
-	socket.on("disconnect", () => destroy_player(new_player, "disconnection"));
-	players.set(cur_id, new_player);
-	cur_id += 1;
+	socket.on("disconnect", () => destroy_player(player_id, "disconnection"));
 });
 
 /* GRAPHICS */
@@ -253,7 +261,7 @@ function check_collisions(player) {
 		for (var collision_data of neighbor.trails) {
 			if ( collision_data.id != player.player_id && intersects(collision_data, player.plane.left_guide.getWorldPosition(), player.plane.right_guide.getWorldPosition()) ) {
 				console.log(player.player_id, "hit", collision_data.id);
-				destroy_player(player, "collision");
+				destroy_player(player.player_id, "collision");
 				return true;
 			}
 		}
@@ -299,8 +307,8 @@ initialize_cells();
 
 function get_cell(v) {
 	var x =  Math.floor(v.x / cell_dim);
-	var	y = Math.floor(v.y / cell_dim);
-	var	z = Math.floor(v.z / cell_dim);
+	var y = Math.floor(v.y / cell_dim);
+	var z = Math.floor(v.z / cell_dim);
 	return cells[x][y][z];
 }
 
