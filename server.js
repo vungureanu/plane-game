@@ -3,7 +3,7 @@ var http = require("http").createServer(app);
 var io = require("socket.io")(http);
 var THREE = require("three");
 var players = new Map();
-const outer_radius = 1000;
+const outer_radius = 150;
 const center = new THREE.Vector3(outer_radius, outer_radius, outer_radius);
 const inner_radius = 50;
 const REFRESH_TIME = 100; // Milliseconds between successive refreshes
@@ -12,7 +12,8 @@ const NORMAL_SPEED = 0.5;
 const FAST_SPEED = 3;
 const TURN_SPEED = 0.25;
 var cell_dim = 50; // Side length of cubes into which space is partitioned for collision detection purposes
-const initial_gas = 100;
+const initial_gas = 1000;
+const buffer = 20; // Determines player's new location after stepping out of bounds
 var cur_id = 0;
 var cells;
 var n = 2 * Math.ceil(outer_radius/cell_dim); // Number of cubes per side
@@ -31,10 +32,12 @@ app.get("/js/client.js", function(req, res) {
 	res.sendFile(__dirname + "/js/client.js");
 });
 
-function Player(player_id) {
-	var r = Math.random() * (200-inner_radius) + inner_radius;
+function Player(player_id, socket) {
+	var r = Math.random() * (outer_radius - inner_radius - 2 * buffer) + inner_radius;
 	var theta = Math.random() * Math.PI;
 	var phi = Math.random() * Math.PI - Math.PI / 2;
+	this.oob_flag = false;
+	this.socket = socket;
 	this.plane = draw_plane();
 	this.x_frac = 0;
 	this.y_frac = 0; // Horizontal mouse position
@@ -94,17 +97,16 @@ function destroy_player(id, reason) {
 	}
 }
 
-function update_location( player ) {
+function update_location(player) {
 	var speed = player.click ? FAST_SPEED : NORMAL_SPEED;
 	player.plane.rotateY(-player.x_frac * speed * TURN_SPEED);
 	player.plane.rotateX(player.y_frac * speed * TURN_SPEED);
 	player.plane.translateZ(speed);
 	player.plane.updateMatrixWorld();
-	//
+	alter_bounds(player);
 	player.cell.planes.delete(player.player_id);
 	player.cell = get_cell(player.plane.position);
 	player.cell.planes.add(player.player_id);
-	//
 	player.gas -= speed;
 	if (player.plane.position.distanceToSquared(center) <= inner_radius * inner_radius) {
 		player.gas = initial_gas;
@@ -135,7 +137,7 @@ io.on("connection", function(socket) {
 			inner_radius: inner_radius,
 			outer_radius: outer_radius
 		});
-		new_player = new Player(player_id);
+		var new_player = new Player(player_id, socket);
 		var msg = {
 			id: new_player.player_id,
 			pos: new_player.plane.position,
@@ -144,8 +146,8 @@ io.on("connection", function(socket) {
 			trail: new_player.trail
 		};
 		socket.emit("id", msg);
-		socket.broadcast.emit("add", msg);
 		for (var player of players.values()) {
+			player.socket.emit("add", msg);
 			socket.emit("add", {
 				id: player.player_id,
 				pos: player.plane.getWorldPosition(),
@@ -186,8 +188,8 @@ function update_trail(player) {
 	player.collision_data.shift();
 	var new_left = player.plane.left_guide.getWorldPosition();
 	var new_right = player.plane.right_guide.getWorldPosition();
-	var old_left = player.trail[trail_length-1].left;
-	var old_right = player.trail[trail_length-1].right;
+	var old_left = player.oob_flag ? new_left.clone() : player.trail[trail_length-1].left;
+	var old_right = player.oob_flag ? new_right.clone() : player.trail[trail_length-1].right;
 	var v1 = new_left.clone();
 	v1.sub(old_left);
 	var v2 = old_right.clone();
@@ -268,6 +270,8 @@ function check_collisions(player) {
 	}
 }
 
+/* INITIALIZATION */
+
 function get_neighbors(x, y, z) {
 	var neighbors = new Set();
 	for (var i of [-1, 0, 1]) {
@@ -303,7 +307,7 @@ function initialize_cells() {
 }
 initialize_cells();
 
-/* MISCELLANEOUS */
+/* MISC. */
 
 function get_cell(v) {
 	var x =  Math.floor(v.x / cell_dim);
@@ -312,18 +316,37 @@ function get_cell(v) {
 	return cells[x][y][z];
 }
 
-/* var m = new THREE.Matrix3();
-m.set(
-	1, 1, -1,
-	1, 1, 1,
-	1, -2, 0
-);
-m = m.getInverse(m);
-collision_data = {
-	matrix : m,
-	normal : new THREE.Vector3( -1, 1, 0 ),
-	point : new THREE.Vector3(1, 2, 3)
+function alter_bounds(player) {
+	var x = player.plane.position.x;
+	var y = player.plane.position.y;
+	var z = player.plane.position.z;
+	player.oob_flag = false;
+	if (x < buffer) {
+		player.oob_flag = true;
+		x = 2 * (outer_radius - buffer);
+	}
+	else if (x > 2 * outer_radius - buffer) {
+		player.oob_flag = true;
+		x = 2 * buffer;
+	}
+	if (y < buffer) {
+		player.oob_flag = true;
+		y = 2 * (outer_radius - buffer);
+	}
+	else if (y > 2 * outer_radius - buffer) {
+		player.oob_flag = true;
+		y = 2 * buffer;
+	}
+	if (z < buffer) {
+		player.oob_flag = true;
+		z = 2 * (outer_radius - buffer);
+	}
+	else if (z > 2 * outer_radius - buffer) {
+		player.oob_flag = true;
+		z = 2 * buffer;
+	}
+	if (player.oob_flag) {
+		player.plane.position.set(x, y, z);
+		player.plane.updateMatrixWorld();
+	}
 }
-var p1 = new THREE.Vector3(-2, 7, 1);
-var p2 = new THREE.Vector3(0, 1, 3);
-intersects(collision_data, p1, p2 ); */

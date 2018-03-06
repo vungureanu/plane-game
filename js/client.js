@@ -5,6 +5,9 @@ const frac = 19 / 20; // Proportion of screen width taken up by main game
 var game_height = window.innerHeight * frac;
 renderer.setSize( window.innerWidth, game_height );
 const gas_bar = document.getElementById("gasBar");
+const gas_context = gas_bar.getContext("2d");
+game_screen.style.visibility = "hidden";
+gas_bar.style.visibility = "hidden";
 var socket = io();
 const trail_material = new THREE.MeshBasicMaterial({
 		color: 0x0000ff,
@@ -18,8 +21,15 @@ const own_material = new THREE.MeshBasicMaterial({
 		transparent : true,
 		opacity: 0.5
 });
+const bounds_settings = {
+	color: 0x0000ff,
+	transparent: true,
+	opacity: 0,
+	side: THREE.DoubleSide
+};
 var trail_length;
 const SEND_INTERVAL = 100; // Milliseconds between successive send operations
+const star_offset = 300;
 var outer_radius;
 var inner_radius;
 var initial_gas;
@@ -30,9 +40,12 @@ var players = new Map(); // State (spatial coordinates and orientation) of all o
 var click = false; // Whether mouse is depressed.
 var own_id;
 var send_data_id; // Identifies process sending data to server.
-var own_plane;
+var own_player;
+var sides = {}; // Outer boundaries of space
 var camera = new THREE.PerspectiveCamera(100, window.innerWidth/game_height, 0.1, 1000);
 var screen_status = "start";
+var buffer = 20;
+const vis_dist = 30;
 
 /* GRAPHICS */
 
@@ -41,20 +54,11 @@ main_screen.width = window.innerWidth;
 main_screen.height = window.innerHeight;
 main_screen.style.visibility = "visible";
 const screen_context = main_screen.getContext("2d");
-/*screen_context.fillStyle = "rgb(0, 0, 0)";
-screen_context.fillRect(0, 0, main_screen.width, main_screen.height);
-screen_context.font = "48px serif";
-screen_context.textAlign = "center";
-screen_context.textBaseline = "middle";
-screen_context.fillStyle = "rgb(255, 255, 255)";
-screen_context.fillText("Click to start.", main_screen.width/2, main_screen.height * 2/3);
-screen_context.font = "24px serif";
-screen_context.fillText("Use the mouse to maneuver; click to accelerate.", main_screen.width/2, main_screen.height * 1/3);
-screen_context.fillText("Try to ensnare other players in your trail, but avoid running into other players' trails.", main_screen.width/2, main_screen.height * 1/3 + 36);
-*/
 
 function add_text() {
 	main_screen.style.visibility = "visible";
+	main_screen.height = window.innerHeight;
+	main_screen.width = window.innerWidth;
 	screen_context.clearRect(0, 0, main_screen.width, main_screen.height);
 	screen_context.fillStyle = "rgb(0, 0, 0)";
 	screen_context.fillRect(0, 0, main_screen.width, main_screen.height);
@@ -80,8 +84,22 @@ function end_screen() {
 	gas_bar.style.visibility = "hidden";
 }
 
+function draw_quadrilateral(p0, p1, p2, p3) {
+	var geometry = new THREE.Geometry();
+	geometry.vertices[0] = p0;
+	geometry.vertices[1] = p1;
+	geometry.vertices[2] = p2;
+	geometry.vertices[3] = p3;
+	geometry.faces.push( new THREE.Face3(0, 1, 2) );
+	geometry.faces.push( new THREE.Face3(0, 2, 3) );
+	return geometry;
+}
+
 // Adds a rectangle to a player's trail, removing oldest rectangle if necessary.
 function add_trail(player, new_coords) {
+	if (player.old_coords.left.distanceTo(new_coords.left) > outer_radius / 2) {
+		player.old_coords = new_coords;
+	}
 	var triangleGeometry = new THREE.Geometry();
 	triangleGeometry.vertices[0] = player.old_coords.left;
 	triangleGeometry.vertices[1] = player.old_coords.right;
@@ -122,6 +140,9 @@ socket.on("update", function(status) {
 		var rot = new THREE.Euler(status.rot._x, status.rot._y, status.rot._z, status.rot._order);
 		player.setRotationFromEuler(rot);
 		player.position.set(status.pos.x, status.pos.y, status.pos.z);
+		if (status.id == own_id) {
+			update_bounds();
+		}
 		var new_coords = player.getCoords();
 		add_trail(player, new_coords);
 		shorten_trail(player);
@@ -139,13 +160,14 @@ socket.on("id", function(status) {
 	}
 	own_id = status.id;
 	own_player = new Player(status.id, status.pos, status.rot, true);
-	for ( var i = 0; i < trail_length; i++ ) {
+	for (var i = 0; i < trail_length; i++) {
 		own_player.trail.push(own_player.old_coords);
 	}
 	send_data_id = setInterval(send_data, SEND_INTERVAL);
 });
 
 socket.on("add", function(status) {
+	console.log(status);
 	var player = new Player(status.id, status.pos, status.rot, false);
 	for ( var i = 0; i < trail_length; i++ ) {
 		var new_coords = {
@@ -180,26 +202,27 @@ socket.on("config", function(config) {
 	outer_radius = config.outer_radius;
 	draw_sun();
 	draw_background();
-})
+	draw_bounds();
+	update_gas();
+});
 
 /* CONTROLS */
 
-window.addEventListener('mousemove', function(e) {
+window.addEventListener("mousemove", function(e) {
 	x_frac = (e.clientX - window.innerWidth / 2) / window.innerWidth;
 	y_frac = (e.clientY - game_height / 2) / game_height;
 });
 
-window.addEventListener('resize', function() {
+window.addEventListener("resize", function() {
 	game_height = window.innerHeight * frac;
 	renderer.setSize(window.innerWidth, game_height);
 	camera.aspect = window.innerWidth / game_height;
-	gas_bar.style.top = game_height;
 	camera.updateProjectionMatrix();
-	main_screen.width = window.innerWidth;
-	main_screen.height = window.innerHeight;
+	update_gas();
+	add_text();
 });
 
-window.addEventListener('mousedown', function() {
+window.addEventListener("mousedown", function() {
 	if (screen_status == "start") {
 		screen_status = "waiting";
 		socket.emit("start");
@@ -208,7 +231,8 @@ window.addEventListener('mousedown', function() {
 		click = true;
 	}
 });
-window.addEventListener('mouseup', function() {
+
+window.addEventListener("mouseup", function() {
 	click = false;
 });
 
@@ -265,7 +289,7 @@ function draw_background() {
 	for (var i = 0; i < 100; i++) {
 		let radius = Math.random() * 1 + 0.5;
 		let geometry = new THREE.SphereGeometry(radius, 32, 32);
-		let r = Math.random() * 1000 + 300;
+		let r = Math.random() * outer_radius + outer_radius + star_offset;
 		let theta = Math.random() * 2 * Math.PI;
 		let phi = Math.random() * Math.PI;
 		let star = new THREE.Mesh( geometry, material );
@@ -280,10 +304,15 @@ function draw_background() {
 }
 
 function update_gas(gas) {
+	gas_bar.width = window.innerWidth;
+	gas_bar.height = window.innerHeight - game_height;
+	gas_bar.style.top = game_height;
 	gas_context.clearRect(0, 0, gas_bar.width, gas_bar.height);
+	gas_context.fillStyle = "rgb(0, 0, 0)";
+	gas_context.fillRect(0, 0, gas_bar.width, gas_bar.height);
 	var frac = gas / initial_gas;
 	var red = Math.ceil( 255 * (1 - frac) );
-	var green = Math.ceil( 255 * frac );
+	var green = Math.ceil(255 * frac);
 	gas_context.fillStyle = "rgb(" + red + "," + green + "," + "0)";
 	gas_context.fillRect(0, 0, gas_bar.width * frac, gas_bar.height);
 }
@@ -310,17 +339,43 @@ function add_explosion(pos) {
 	scene.add(sphere);
 }
 
-/* GAS BAR */
+function draw_bounds() {
+	var l = 2 * outer_radius;
+	var p0 = new THREE.Vector3(0, 0, 0);
+	var p1 = new THREE.Vector3(0, 0, l);
+	var p2 = new THREE.Vector3(0, l, l);
+	var p3 = new THREE.Vector3(0, l, 0);
+	var p4 = new THREE.Vector3(l, 0, 0);
+	var p5 = new THREE.Vector3(l, 0, l);
+	var p6 = new THREE.Vector3(l, l, l);
+	var p7 = new THREE.Vector3(l, l, 0);
+	var geometry0 = draw_quadrilateral(p0, p1, p2, p3);
+	sides.x0 = new THREE.MeshBasicMaterial(bounds_settings);
+	scene.add( new THREE.Mesh(geometry0, sides.x0) );
+	var geometry1 = draw_quadrilateral(p4, p5, p6, p7);
+	sides.x1 = new THREE.MeshBasicMaterial(bounds_settings);
+	scene.add( new THREE.Mesh(geometry1, sides.x1) );
+	var geometry2 = draw_quadrilateral(p0, p1, p5, p4);
+	sides.y0 = new THREE.MeshBasicMaterial(bounds_settings);
+	scene.add( new THREE.Mesh(geometry2, sides.y0) );
+	var geometry3 = draw_quadrilateral(p3, p2, p6, p7);
+	sides.y1 = new THREE.MeshBasicMaterial(bounds_settings);
+	scene.add( new THREE.Mesh(geometry3, sides.y1) );
+	var geometry4 = draw_quadrilateral(p0, p3, p7, p4); 
+	sides.z0 = new THREE.MeshBasicMaterial(bounds_settings);
+	scene.add( new THREE.Mesh(geometry4, sides.z0) );
+	var geometry5 = draw_quadrilateral(p1, p2, p6, p5);
+	sides.z1 = new THREE.MeshBasicMaterial(bounds_settings);
+	scene.add( new THREE.Mesh(geometry5, sides.z1) );
+}
 
-gas_bar.style.top = game_height;
-gas_bar.width = window.innerWidth;
-gas_bar.height = window.innerHeight - game_height;
-var gas_context = gas_bar.getContext("2d");
-gas_context.fillStyle = "rgb(0, 0, 0)";
-gas_context.fillRect(0, 0, gas_bar.width/2, gas_bar.height);
-
-game_screen.style.visibility = "hidden";
-gas_bar.style.visibility = "hidden";
+function update_bounds() {
+	var coords = own_player.getWorldPosition();
+	for ( var dim of ["x", "y", "z"] ) {
+		sides[dim + 0].opacity = coords[dim] < vis_dist + buffer ? 1 - (coords[dim] - buffer) / vis_dist : 0;
+		sides[dim + 1].opacity = coords[dim] > 2 * outer_radius - buffer - vis_dist ? 1 - (2 * outer_radius - buffer - coords[dim]) / vis_dist : 0;
+	}
+}
 
 /* MISC */
 
@@ -330,3 +385,4 @@ function destroy_player(player) {
 	}
 	scene.remove(player);
 }
+
