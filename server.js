@@ -18,11 +18,12 @@ var cur_id = 0;
 var cells;
 var n = 2 * Math.ceil(outer_radius/cell_dim); // Number of cubes per side
 const epsilon = 1;
-const initial_seconds = 3;
+const initial_seconds = 30;
 var seconds_left = initial_seconds;
 var update_id;
 var game_in_progress = false;
 var timer;
+const respawn_time = 0;
 
 http.listen(3000, function(){
 	console.log('listening on *:3000');
@@ -39,13 +40,11 @@ app.get("/js/client.js", function(req, res) {
 });
 
 function Player(player_id, socket) {
-	var r = Math.random() * (outer_radius - inner_radius - 2 * buffer) + inner_radius;
-	var theta = Math.random() * Math.PI;
-	var phi = Math.random() * Math.PI - Math.PI / 2;
+	THREE.Object3D.call(this);
+	draw_plane.call(this);
 	this.score = 0;
 	this.oob_flag = false;
 	this.socket = socket;
-	this.plane = draw_plane();
 	this.x_frac = 0;
 	this.y_frac = 0; // Horizontal mouse position
 	this.click = false, // Whether mouse is depressed
@@ -56,25 +55,11 @@ function Player(player_id, socket) {
 	and v3 is their cross product.  Also includes the center point of the trail rectangle and a normal to the
 	trail rectangle. */
 	this.trail = []; // Coordinates of trail edges
-	this.plane.position.set(
-		r * Math.sin(theta) * Math.cos(phi),
-		r * Math.sin(theta) * Math.sin(phi),
-		r * Math.cos(theta)
-	);
-	this.plane.position.addScalar(outer_radius);
-	this.plane.updateMatrixWorld();
-	var lr_coords = {
-		left : this.plane.left_guide.getWorldPosition(),
-		right : this.plane.right_guide.getWorldPosition()
-	};
-	this.cell = get_cell(this.plane.position);
-	this.cell.planes.add(cur_id);
-	for (var i = 0; i < trail_length-1; i++) {
-		this.trail.push(lr_coords);
-		this.collision_data.push( {normal: new THREE.Vector3(0, 0, 0), cell: this.cell, id: player_id} );
-	}
-	this.trail.push(lr_coords);
+	deploy_player(this);
 }
+
+Player.prototype = new THREE.Object3D();
+Player.prototype.constructor = Player;
 
 function update_world() {
 	for ( var player of players.values() ) {
@@ -86,7 +71,7 @@ function update_world() {
 
 /* SOCKET */
 
-function destroy_player(id, reason) {
+function destroy_player(id, reason, redeploy) {
 	if ( players.has(id) ) {
 		let player = players.get(id);
 		console.log("Destroying", id, "because of", reason);
@@ -95,25 +80,66 @@ function destroy_player(id, reason) {
 			collision_data.cell.trails.delete(collision_data);
 		}
 		player.cell.planes.delete(id);
-		players.delete(id);
+		if (redeploy) {
+			setTimeout(redeploy_player.bind(null, player), respawn_time);
+		}
+		else {
+			players.delete(id);
+		}
 	}
 	else {
 		console.log("Attempt to delete non-existent player:", id);
 	}
 }
 
+function deploy_player(player) {
+	var r = Math.random() * (outer_radius - inner_radius - 2 * buffer) + inner_radius;
+	var theta = Math.random() * Math.PI;
+	var phi = Math.random() * Math.PI - Math.PI / 2;
+	player.position.set(
+		r * Math.sin(theta) * Math.cos(phi),
+		r * Math.sin(theta) * Math.sin(phi),
+		r * Math.cos(theta)
+	);
+	player.position.addScalar(outer_radius);
+	player.updateMatrixWorld();
+	var coords = {
+		left : player.left_guide.getWorldPosition(),
+		right : player.right_guide.getWorldPosition()
+	};
+	player.cell = get_cell(player.position);
+	player.cell.planes.add(player.player_id);
+	for (var i = 0; i < trail_length-1; i++) {
+		player.trail.push(coords);
+		player.collision_data.push( {normal: new THREE.Vector3(0, 0, 0), cell: player.cell, id: player.player_id} );
+	}
+	player.trail.push(coords);
+}
+
+function redeploy_player(player) {
+	deploy_player(player);
+	var msg = {
+		id: player.player_id,
+		pos: player.getWorldPosition(),
+		rot: player.rotation,
+		trail: player.trail
+	};
+	player.socket.broadcast.emit("add", msg);
+	player.socket.emit("id", msg);
+}
+
 function update_location(player) {
 	var speed = player.click ? FAST_SPEED : NORMAL_SPEED;
-	player.plane.rotateY(-player.x_frac * speed * TURN_SPEED);
-	player.plane.rotateX(player.y_frac * speed * TURN_SPEED);
-	player.plane.translateZ(speed);
-	player.plane.updateMatrixWorld();
+	player.rotateY(-player.x_frac * speed * TURN_SPEED);
+	player.rotateX(player.y_frac * speed * TURN_SPEED);
+	player.translateZ(speed);
+	player.updateMatrixWorld();
 	alter_bounds(player);
 	player.cell.planes.delete(player.player_id);
-	player.cell = get_cell(player.plane.position);
+	player.cell = get_cell(player.position);
 	player.cell.planes.add(player.player_id);
 	player.gas -= speed;
-	if (player.plane.position.distanceToSquared(center) <= inner_radius * inner_radius) {
+	if (player.position.distanceToSquared(center) <= inner_radius * inner_radius) {
 		player.gas = initial_gas;
 	}
 	if (player.gas <= 0) {
@@ -125,8 +151,8 @@ function update_location(player) {
 function send_location(player) {
 	io.emit("update", {
 		id: player.player_id, 
-		pos: player.plane.getWorldPosition(),
-		rot: player.plane.rotation,
+		pos: player.getWorldPosition(),
+		rot: player.rotation,
 		gas: player.gas
 	});
 }
@@ -151,9 +177,8 @@ io.on("connection", function(socket) {
 		var new_player = new Player(player_id, socket);
 		var msg = {
 			id: new_player.player_id,
-			pos: new_player.plane.position,
-			rot: new_player.plane.rotation,
-			gas: initial_gas,
+			pos: new_player.position,
+			rot: new_player.rotation,
 			trail: new_player.trail
 		};
 		socket.emit("id", msg);
@@ -161,8 +186,8 @@ io.on("connection", function(socket) {
 			player.socket.emit("add", msg);
 			socket.emit("add", {
 				id: player.player_id,
-				pos: player.plane.getWorldPosition(),
-				rot: player.plane.rotation,
+				pos: player.getWorldPosition(),
+				rot: player.rotation,
 				trail: player.trail
 			});
 		}
@@ -184,21 +209,19 @@ io.on("connection", function(socket) {
 /* GRAPHICS */
 
 function draw_plane() {
-	var plane = new THREE.Object3D();
-	plane.left_guide = new THREE.Object3D();
-	plane.right_guide = new THREE.Object3D();
-	plane.left_guide.position.set(5, 0, 0);
-	plane.right_guide.position.set(-5, 0, 0);
-	plane.add(plane.left_guide);
-	plane.add(plane.right_guide);
-	return plane;
+	this.left_guide = new THREE.Object3D();
+	this.right_guide = new THREE.Object3D();
+	this.left_guide.position.set(5, 0, 0);
+	this.right_guide.position.set(-5, 0, 0);
+	this.add(this.left_guide);
+	this.add(this.right_guide);
 }
 
 function update_trail(player) {
 	player.collision_data[0].cell.trails.delete(player.collision_data[0]);
 	player.collision_data.shift();
-	var new_left = player.plane.left_guide.getWorldPosition();
-	var new_right = player.plane.right_guide.getWorldPosition();
+	var new_left = player.left_guide.getWorldPosition();
+	var new_right = player.right_guide.getWorldPosition();
 	var old_left = player.oob_flag ? new_left.clone() : player.trail[trail_length-1].left;
 	var old_right = player.oob_flag ? new_right.clone() : player.trail[trail_length-1].right;
 	var v1 = new_left.clone();
@@ -272,7 +295,7 @@ function intersects(collision_data, p1, p2) {
 function check_collisions(player) {
 	for (var neighbor of player.cell.neighbors) {
 		for (var collision_data of neighbor.trails) {
-			if ( collision_data.id != player.player_id && intersects(collision_data, player.plane.left_guide.getWorldPosition(), player.plane.right_guide.getWorldPosition()) ) {
+			if ( collision_data.id != player.player_id && intersects(collision_data, player.left_guide.getWorldPosition(), player.right_guide.getWorldPosition()) ) {
 				console.log(player.player_id, "hit", collision_data.id);
 				players.get(collision_data.id).score++;
 				destroy_player(player.player_id, "collision");
@@ -329,9 +352,9 @@ function get_cell(v) {
 }
 
 function alter_bounds(player) {
-	var x = player.plane.position.x;
-	var y = player.plane.position.y;
-	var z = player.plane.position.z;
+	var x = player.position.x;
+	var y = player.position.y;
+	var z = player.position.z;
 	player.oob_flag = false;
 	if (x < buffer) {
 		player.oob_flag = true;
@@ -358,8 +381,8 @@ function alter_bounds(player) {
 		z = buffer + epsilon;
 	}
 	if (player.oob_flag) {
-		player.plane.position.set(x, y, z);
-		player.plane.updateMatrixWorld();
+		player.position.set(x, y, z);
+		player.updateMatrixWorld();
 	}
 }
 
