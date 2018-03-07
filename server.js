@@ -18,7 +18,7 @@ var cur_id = 0;
 var cells;
 var n = 2 * Math.ceil(outer_radius/cell_dim); // Number of cubes per side
 const epsilon = 1;
-const initial_seconds = 5;
+const initial_seconds = 3;
 var seconds_left = initial_seconds;
 var update_id;
 var game_in_progress = false;
@@ -379,8 +379,9 @@ function reset_all() {
 	clearInterval(update_id);
 	clearInterval(timer);
 	for ( var player of players.values() ) {
-		io.emit("result", { id: player.player_id, score: player.score });
+		io.emit("result", {id: player.player_id, score: player.score} );
 	}
+	io.emit("results_sent", players.size);
 	players = new Map();
 	initialize_cells();
 	seconds_left = initial_seconds;
