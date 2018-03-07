@@ -2,12 +2,15 @@ const scene = new THREE.Scene();
 const game_screen = document.getElementById("game_screen");
 const renderer = new THREE.WebGLRenderer( {canvas: game_screen} );
 const frac = 19 / 20; // Proportion of screen width taken up by main game
+var seconds_left;
 var game_height = window.innerHeight * frac;
 renderer.setSize( window.innerWidth, game_height );
 const gas_bar = document.getElementById("gasBar");
 const gas_context = gas_bar.getContext("2d");
+const timer = document.getElementById("timer");
 game_screen.style.visibility = "hidden";
 gas_bar.style.visibility = "hidden";
+var first_round = true;
 var socket = io();
 const trail_material = new THREE.MeshBasicMaterial({
 		color: 0x0000ff,
@@ -21,11 +24,17 @@ const own_material = new THREE.MeshBasicMaterial({
 		transparent : true,
 		opacity: 0.5
 });
-const bounds_settings = {
+const bounds_front = {
 	color: 0x0000ff,
 	transparent: true,
 	opacity: 0,
-	side: THREE.DoubleSide
+	side: THREE.FrontSide
+};
+const bounds_back = {
+	color: 0x0000ff,
+	transparent: true,
+	opacity: 0,
+	side: THREE.BackSide
 };
 var trail_length;
 const SEND_INTERVAL = 100; // Milliseconds between successive send operations
@@ -74,6 +83,7 @@ function add_text() {
 add_text();
 
 function end_screen() {
+	timer.innerHTML = "";
 	for ( var player of players.values() ) {
 		destroy_player(player);
 	}
@@ -195,15 +205,30 @@ socket.on("destroy", function(status) {
 	renderer.render(scene, camera);
 });
 
+socket.on("game_over", function() {
+	clearInterval(send_data_id);
+	end_screen();
+});
+
 socket.on("config", function(config) {
 	initial_gas = config.initial_gas;
 	trail_length = config.trail_length;
 	inner_radius = config.inner_radius;
 	outer_radius = config.outer_radius;
-	draw_sun();
-	draw_background();
-	draw_bounds();
+	seconds_left = config.seconds_left;
+	if (first_round) {
+		draw_sun();
+		draw_background();
+		draw_bounds();
+		first_round = false;
+	}
 	update_gas();
+	draw_time();
+});
+
+socket.on("time", function(sl) {
+	seconds_left = sl;
+	draw_time();
 });
 
 /* CONTROLS */
@@ -350,22 +375,22 @@ function draw_bounds() {
 	var p6 = new THREE.Vector3(l, l, l);
 	var p7 = new THREE.Vector3(l, l, 0);
 	var geometry0 = draw_quadrilateral(p0, p1, p2, p3);
-	sides.x0 = new THREE.MeshBasicMaterial(bounds_settings);
+	sides.x0 = new THREE.MeshBasicMaterial(bounds_back);
 	scene.add( new THREE.Mesh(geometry0, sides.x0) );
 	var geometry1 = draw_quadrilateral(p4, p5, p6, p7);
-	sides.x1 = new THREE.MeshBasicMaterial(bounds_settings);
+	sides.x1 = new THREE.MeshBasicMaterial(bounds_front);
 	scene.add( new THREE.Mesh(geometry1, sides.x1) );
 	var geometry2 = draw_quadrilateral(p0, p1, p5, p4);
-	sides.y0 = new THREE.MeshBasicMaterial(bounds_settings);
+	sides.y0 = new THREE.MeshBasicMaterial(bounds_front);
 	scene.add( new THREE.Mesh(geometry2, sides.y0) );
 	var geometry3 = draw_quadrilateral(p3, p2, p6, p7);
-	sides.y1 = new THREE.MeshBasicMaterial(bounds_settings);
+	sides.y1 = new THREE.MeshBasicMaterial(bounds_back);
 	scene.add( new THREE.Mesh(geometry3, sides.y1) );
 	var geometry4 = draw_quadrilateral(p0, p3, p7, p4); 
-	sides.z0 = new THREE.MeshBasicMaterial(bounds_settings);
+	sides.z0 = new THREE.MeshBasicMaterial(bounds_back);
 	scene.add( new THREE.Mesh(geometry4, sides.z0) );
 	var geometry5 = draw_quadrilateral(p1, p2, p6, p5);
-	sides.z1 = new THREE.MeshBasicMaterial(bounds_settings);
+	sides.z1 = new THREE.MeshBasicMaterial(bounds_front);
 	scene.add( new THREE.Mesh(geometry5, sides.z1) );
 }
 
@@ -375,6 +400,12 @@ function update_bounds() {
 		sides[dim + 0].opacity = coords[dim] < vis_dist + buffer ? 1 - (coords[dim] - buffer) / vis_dist : 0;
 		sides[dim + 1].opacity = coords[dim] > 2 * outer_radius - buffer - vis_dist ? 1 - (2 * outer_radius - buffer - coords[dim]) / vis_dist : 0;
 	}
+}
+
+function draw_time() {
+	timer.style.left = window.innerWidth - 50;
+	timer.style.top = 20;
+	timer.innerHTML = Math.floor(seconds_left / 60) + ":" + (seconds_left < 10 ? "0" : "") + (seconds_left % 60);
 }
 
 /* MISC */

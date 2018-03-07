@@ -17,12 +17,23 @@
 				position : absolute;
 				top : 0px;
 				left : 0px;
+				z-index: 1;
+			}
+			#timer {
+				position: absolute;
+				z-index: 2;
+				color: white;
+				background-color: rgba(0, 0, 0, 0);
+				top: 20px;
+				cursor: default;
+				user-select: none;
 			}
 		</style>
 	</head>
 	<body>
 		<canvas id="main_screen"></canvas>
 		<canvas id="game_screen"></canvas>
+		<div id="timer">Blah</div>
 		<canvas id="gasBar"></canvas>
 		<script src="/socket.io/socket.io.js"></script>
 		<script src="/js/three.js"></script>

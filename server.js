@@ -17,6 +17,12 @@ const buffer = 20; // Determines player's new location after stepping out of bou
 var cur_id = 0;
 var cells;
 var n = 2 * Math.ceil(outer_radius/cell_dim); // Number of cubes per side
+const epsilon = 1;
+const initial_seconds = 5;
+var seconds_left = initial_seconds;
+var update_id;
+var game_in_progress = false;
+var timer;
 
 http.listen(3000, function(){
 	console.log('listening on *:3000');
@@ -36,6 +42,7 @@ function Player(player_id, socket) {
 	var r = Math.random() * (outer_radius - inner_radius - 2 * buffer) + inner_radius;
 	var theta = Math.random() * Math.PI;
 	var phi = Math.random() * Math.PI - Math.PI / 2;
+	this.score = 0;
 	this.oob_flag = false;
 	this.socket = socket;
 	this.plane = draw_plane();
@@ -64,7 +71,7 @@ function Player(player_id, socket) {
 	this.cell.planes.add(cur_id);
 	for (var i = 0; i < trail_length-1; i++) {
 		this.trail.push(lr_coords);
-		this.collision_data.push( {normal: new THREE.Vector3(0, 0, 0), cell: this.cell} );
+		this.collision_data.push( {normal: new THREE.Vector3(0, 0, 0), cell: this.cell, id: player_id} );
 	}
 	this.trail.push(lr_coords);
 }
@@ -76,8 +83,6 @@ function update_world() {
 		check_collisions(player);
 	}
 }
-
-setInterval(update_world, REFRESH_TIME);
 
 /* SOCKET */
 
@@ -131,11 +136,17 @@ io.on("connection", function(socket) {
 	cur_id++;
 	console.log("New connection from", socket.handshake.address);
 	socket.on("start", function() {
+		if (!game_in_progress) {
+			update_id = setInterval(update_world, REFRESH_TIME);
+			timer = setInterval(count_down, 1000);
+			game_in_progress = true;
+		}
 		socket.emit("config", {
 			initial_gas: initial_gas,
 			trail_length: trail_length,
 			inner_radius: inner_radius,
-			outer_radius: outer_radius
+			outer_radius: outer_radius,
+			seconds_left: seconds_left
 		});
 		var new_player = new Player(player_id, socket);
 		var msg = {
@@ -221,7 +232,7 @@ function update_trail(player) {
 	};
 	cell.trails.add(collision_data);
 	player.collision_data.push(collision_data);
-	player.trail.push( {left: new_left, right: new_right, cell: cell} );
+	player.trail.push( {left: new_left, right: new_right} );
 	player.trail.shift();
 }
 
@@ -263,6 +274,7 @@ function check_collisions(player) {
 		for (var collision_data of neighbor.trails) {
 			if ( collision_data.id != player.player_id && intersects(collision_data, player.plane.left_guide.getWorldPosition(), player.plane.right_guide.getWorldPosition()) ) {
 				console.log(player.player_id, "hit", collision_data.id);
+				players.get(collision_data.id).score++;
 				destroy_player(player.player_id, "collision");
 				return true;
 			}
@@ -323,30 +335,53 @@ function alter_bounds(player) {
 	player.oob_flag = false;
 	if (x < buffer) {
 		player.oob_flag = true;
-		x = 2 * (outer_radius - buffer);
+		x = 2 * outer_radius - buffer - epsilon;
 	}
 	else if (x > 2 * outer_radius - buffer) {
 		player.oob_flag = true;
-		x = 2 * buffer;
+		x = buffer + epsilon;
 	}
 	if (y < buffer) {
 		player.oob_flag = true;
-		y = 2 * (outer_radius - buffer);
+		y = 2 * outer_radius - buffer - epsilon;
 	}
 	else if (y > 2 * outer_radius - buffer) {
 		player.oob_flag = true;
-		y = 2 * buffer;
+		y = buffer + epsilon;
 	}
 	if (z < buffer) {
 		player.oob_flag = true;
-		z = 2 * (outer_radius - buffer);
+		z = 2 * outer_radius - buffer - epsilon;
 	}
 	else if (z > 2 * outer_radius - buffer) {
 		player.oob_flag = true;
-		z = 2 * buffer;
+		z = buffer + epsilon;
 	}
 	if (player.oob_flag) {
 		player.plane.position.set(x, y, z);
 		player.plane.updateMatrixWorld();
 	}
+}
+
+function count_down() {
+	if (seconds_left == 0) {
+		reset_all();
+	}
+	else {
+		io.emit("time", seconds_left);
+		seconds_left--;
+	}
+}
+
+function reset_all() {
+	game_in_progress = false;
+	io.emit("game_over");
+	clearInterval(update_id);
+	clearInterval(timer);
+	for ( var player of players.values() ) {
+		io.emit("result", { id: player.player_id, score: player.score });
+	}
+	players = new Map();
+	initialize_cells();
+	seconds_left = initial_seconds;
 }
