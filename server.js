@@ -330,6 +330,7 @@ function check_collisions(player) {
 
 function get_neighbors(x, y, z) {
 	var neighbors = new Set();
+	neighbors.add(cells[x][y][z]);
 	for (var i of [-1, 0, 1]) {
 		for (var j of [-1, 0, 1]) {
 			for (var k of [-1, 0, 1]) {
