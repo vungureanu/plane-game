@@ -24,6 +24,7 @@ var update_id;
 var game_in_progress = false;
 var timer;
 const respawn_time = 1000;
+const accepted_characters = /^[0-9 + a-z + A-Z + _]+$/;
 
 http.listen(3000, function(){
 	console.log('listening on *:3000');
@@ -39,10 +40,16 @@ app.get("/js/client.js", function(req, res) {
 	res.sendFile(__dirname + "/js/client.js");
 });
 
-function Player(player_id, socket) {
+function Player(player_id, user_name, socket) {
 	THREE.Object3D.call(this);
 	draw_plane.call(this);
 	this.score = 0;
+	if ( user_name.match(accepted_characters) ) {
+		this.user_name = user_name;
+	}
+	else {
+		this.user_name = "guest";
+	}
 	this.socket = socket;
 	this.x_frac = 0;
 	this.y_frac = 0; // Horizontal mouse position
@@ -169,7 +176,7 @@ io.on("connection", function(socket) {
 	var player_id = cur_id;
 	cur_id++;
 	console.log("New connection from", socket.handshake.address);
-	socket.on("start", function() {
+	socket.on("start", function(user_name) {
 		if (!game_in_progress) {
 			update_id = setInterval(update_world, REFRESH_TIME);
 			timer = setInterval(count_down, 1000);
@@ -182,7 +189,7 @@ io.on("connection", function(socket) {
 			outer_radius: outer_radius,
 			seconds_left: seconds_left
 		});
-		var new_player = new Player(player_id, socket);
+		var new_player = new Player(player_id, user_name, socket);
 		var msg = {
 			id: new_player.player_id,
 			pos: new_player.position,
@@ -416,7 +423,7 @@ function reset_all() {
 	clearInterval(update_id);
 	clearInterval(timer);
 	for ( var player of players.values() ) {
-		io.emit("result", {id: player.player_id, score: player.score} );
+		io.emit("result", {user_name: player.user_name, score: player.score} );
 	}
 	io.emit("results_sent", players.size);
 	players = new Map();

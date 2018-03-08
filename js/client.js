@@ -60,9 +60,12 @@ const vis_dist = 30;
 var results = [];
 var total_results;
 const vertical_spacing = 0.75;
-const start_message = "\nUse the mouse to maneuver; click to accelerate.\nTry to ensnare other players in your trail, but avoid running into other players' trails.\nIf you venture beyond the bounds of the arena, you will reappear on the opposite side.\n\n\nPress SPACE to start.\n";
+const enter_name = "\nEnter nickname: ";
+const start_message = "\n\n\nUse the mouse to maneuver; click to accelerate.\nTry to ensnare other players in your trail, but avoid running into other players' trails.\nIf you venture beyond the bounds of the arena, you will reappear on the opposite side.\n\n\nPress ENTER to start.\n";
+var user_name = "";
 const fade_rate = 20;
 const fade_increment = 0.1;
+const accepted_characters = /[0-9 + a-z + A-Z + _]/;
 
 /* GRAPHICS */
 
@@ -83,7 +86,8 @@ function prepare_screen() {
 }
 
 prepare_screen();
-format_text(start_message);
+format_text(enter_name + user_name + start_message);
+
 
 function format_text(msg) {
 	prepare_screen();
@@ -102,22 +106,21 @@ function format_text(msg) {
 
 function display_results() {
 	prepare_screen();
-	var offset = 50;
-	var line_height = Math.min(Math.ceil(main_screen.height / total_results), 24);
-	screen_context.font = line_height + "px serif";
+	var msg = "Final results:\n\n\n"
 	for (var result of results) {
-		screen_context.fillText(result.name + ": " + result.score, main_screen.width / 2, offset);
-		offset += line_height;
+		msg += result.user_name + ": " + result.score + "\n";
 	}
+	msg += "\n\n\nPress ENTER to continue"
+	format_text(msg);
 }
 
 function clear_players() {
 	timer.innerHTML = "";
 	for ( var player of players.values() ) {
-		destroy_player(player);
+		remove_player(player);
 	}
 	players = new Map();
-	screen_status = "start";
+	screen_status = "end";
 	game_screen.style.visibility = "hidden";
 	gas_bar.style.visibility = "hidden";
 }
@@ -223,12 +226,10 @@ socket.on("add", function(status) {
 
 socket.on("destroy", function(status) {
 	if ( players.has(status.id) ) {
-		//destroy_player( players.get(status.id) );
 		explode( players.get(status.id) );
-		//add_explosion( players.get(status.id).getWorldPosition() );
-		//players.delete(status.id);
 	}
 	if (status.id == own_id) {
+		clearInterval(send_data_id);
 		own_id = -1;
 		if (status.reason == "gas") {
 			gas = 0;
@@ -265,7 +266,8 @@ socket.on("time", function(sl) {
 });
 
 socket.on("result", function(status) {
-	results.push( {name: status.id, score: status.score} );
+	console.log(status);
+	results.push( {user_name: status.user_name, score: status.score} );
 	if (results.length == total_results) {
 		results.sort( (a, b) => a.score < b.score ? -1 : 1 );
 		display_results();
@@ -294,7 +296,10 @@ window.addEventListener("resize", function() {
 	camera.updateProjectionMatrix();
 	update_gas();
 	if (screen_status == "start") {
-		format_text(start_message);
+		format_text(enter_name + user_name + start_message);
+	}
+	if (screen_status == "end") {
+		display_results();
 	}
 });
 
@@ -302,10 +307,24 @@ window.addEventListener("mousedown", function() {
 	click = true;
 });
 
-window.addEventListener("keypress", function(e) {
-	if (e.key == ' ' && screen_status == "start") {
-		screen_status = "waiting";
-		socket.emit("start");
+window.addEventListener("keydown", function(e) {
+	if (e.key == "Enter") {
+		if (screen_status == "end") {
+			screen_status = "start";
+			format_text(enter_name + user_name + start_message);
+		}
+		else if (screen_status == "start") {
+			screen_status = "waiting";
+			socket.emit("start", user_name);
+		}
+	}
+	else if ( e.key.length == 1 && e.key.match(accepted_characters) ) {
+		user_name += e.key;
+		format_text(enter_name + user_name + start_message);
+	}
+	else if (e.key == "Backspace") {
+		user_name = user_name.slice(0, -1);
+		format_text(enter_name + user_name + start_message);
 	}
 });
 
@@ -458,16 +477,17 @@ function update_bounds() {
 }
 
 function draw_time() {
-	timer.style.left = window.innerWidth - 50;
-	timer.style.top = 20;
-	timer.innerHTML = Math.floor(seconds_left / 60) + ":" + (seconds_left < 10 ? "0" : "") + (seconds_left % 60);
+	timer.innerHTML = "Time remaining: " + Math.floor(seconds_left / 60) + ":" + (seconds_left < 10 ? "0" : "") + (seconds_left % 60);
 }
 
 /* MISC */
 
-function destroy_player(player) {
+function remove_player(player) {
 	for (square of player.trail) {
 		scene.remove(square);
+	}
+	if (player.player_id == own_id) {
+		player.remove(camera);
 	}
 	scene.remove(player);
 }
