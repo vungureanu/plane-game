@@ -40,6 +40,7 @@ const bounds_back = {
 var trail_length;
 const SEND_INTERVAL = 100; // Milliseconds between successive send operations
 const star_offset = 300;
+const field_of_view = 75;
 var outer_radius;
 var inner_radius;
 var initial_gas;
@@ -48,16 +49,20 @@ var x_frac = 0;
 var y_frac = 0;
 var players = new Map(); // State (spatial coordinates and orientation) of all other players
 var click = false; // Whether mouse is depressed.
-var own_id;
+var own_id = -1;
 var send_data_id; // Identifies process sending data to server.
 var own_player;
 var sides = {}; // Outer boundaries of space
-var camera = new THREE.PerspectiveCamera(100, window.innerWidth/game_height, 0.1, 1000);
+var camera = new THREE.PerspectiveCamera(field_of_view, window.innerWidth/game_height, 0.1, 1000);
 var screen_status = "start";
 var buffer = 20;
 const vis_dist = 30;
 var results = [];
 var total_results;
+const vertical_spacing = 0.75;
+const start_message = "\nUse the mouse to maneuver; click to accelerate.\nTry to ensnare other players in your trail, but avoid running into other players' trails.\nIf you venture beyond the bounds of the arena, you will reappear on the opposite side.\n\n\nPress SPACE to start.\n";
+const fade_rate = 20;
+const fade_increment = 0.1;
 
 /* GRAPHICS */
 
@@ -77,18 +82,23 @@ function prepare_screen() {
 	screen_context.fillStyle = "rgb(255, 255, 255)";
 }
 
-function add_text() {
+prepare_screen();
+format_text(start_message);
+
+function format_text(msg) {
 	prepare_screen();
-	screen_context.textAlign = "center";
+	var lines = msg.split('\n');
+	var line_height = Math.min( main_screen.height / lines.length, 32 );
+	var total_height = line_height * lines.length;
+	var offset = (main_screen.height - total_height) / 2; 
+	screen_context.font = Math.floor(vertical_spacing * line_height) + "px serif";
 	screen_context.textBaseline = "middle";
-	line_height = Math.min(Math.ceil(main_screen.height / 4), 24);
-	screen_context.font = line_height + "px serif";
+	screen_context.textAlign = "center";
 	screen_context.fillStyle = "rgb(255, 255, 255)";
-	screen_context.fillText("Use the mouse to maneuver; click to accelerate.", main_screen.width / 2, main_screen.height * 1/3);
-	screen_context.fillText("Try to ensnare other players in your trail, but avoid running into other players' trails.", main_screen.width/2, main_screen.height * 1/3 + 36);
-	screen_context.fillText("Click to start.", main_screen.width/2, main_screen.height * 2/3);
+	for (var i = 0; i < lines.length; i++) {
+		screen_context.fillText(lines[i], main_screen.width / 2, offset + line_height * i);
+	}
 }
-add_text();
 
 function display_results() {
 	prepare_screen();
@@ -180,6 +190,9 @@ socket.on("update", function(status) {
 });
 
 socket.on("id", function(status) {
+	if (own_id != -1) {
+		own_player.remove(camera);
+	}
 	own_id = status.id;
 	own_player = new Player(status.id, status.pos, status.rot, true);
 	renderer.render(scene, camera);
@@ -210,11 +223,13 @@ socket.on("add", function(status) {
 
 socket.on("destroy", function(status) {
 	if ( players.has(status.id) ) {
-		destroy_player( players.get(status.id) );
-		add_explosion( players.get(status.id).getWorldPosition() );
-		players.delete(status.id);
+		//destroy_player( players.get(status.id) );
+		explode( players.get(status.id) );
+		//add_explosion( players.get(status.id).getWorldPosition() );
+		//players.delete(status.id);
 	}
 	if (status.id == own_id) {
+		own_id = -1;
 		if (status.reason == "gas") {
 			gas = 0;
 			update_gas();
@@ -278,16 +293,19 @@ window.addEventListener("resize", function() {
 	camera.aspect = window.innerWidth / game_height;
 	camera.updateProjectionMatrix();
 	update_gas();
-	add_text();
+	if (screen_status == "start") {
+		format_text(start_message);
+	}
 });
 
 window.addEventListener("mousedown", function() {
-	if (screen_status == "start") {
+	click = true;
+});
+
+window.addEventListener("keypress", function(e) {
+	if (e.key == ' ' && screen_status == "start") {
 		screen_status = "waiting";
 		socket.emit("start");
-	}
-	else if (screen_status == "game") {
-		click = true;
 	}
 });
 
@@ -299,19 +317,21 @@ window.addEventListener("mouseup", function() {
 
 function Player(player_id, pos, rot, add_camera) {
 	THREE.Object3D.call(this);
+	this.materials = [
+		new THREE.MeshBasicMaterial( {color: 0x0000ff} ),
+		new THREE.MeshBasicMaterial( {color: 0xff00ff} ),
+		new THREE.MeshBasicMaterial( {color: 0x0000ff} ),
+		new THREE.MeshBasicMaterial( {color: 0xff0000} )
+	];
 	var geometry = new THREE.BoxGeometry( 1, 1, 20 );
-	var material = new THREE.MeshBasicMaterial( { color: 0x0000ff } );
-	var cube = new THREE.Mesh( geometry, material );
+	var cube = new THREE.Mesh( geometry, this.materials[0] );
 	var geometry = new THREE.SphereGeometry( 2, 32, 32 );
-	var material = new THREE.MeshBasicMaterial( {color: 0xff00ff} );
-	var sphere = new THREE.Mesh( geometry, material );
+	var sphere = new THREE.Mesh( geometry, this.materials[1] );
 	var geometry = new THREE.BoxGeometry( 10, 1, 1 );
-	var material = new THREE.MeshBasicMaterial( { color: 0x0000ff } );
-	var cross = new THREE.Mesh( geometry, material );
+	var cross = new THREE.Mesh( geometry, this.materials[2] );
 	var geometry = new THREE.SphereGeometry( 1, 32, 32 );
-	var material = new THREE.MeshBasicMaterial( {color: 0xff0000} );
-	this.left_guide = new THREE.Mesh( geometry, material );
-	this.right_guide = new THREE.Mesh( geometry, material );
+	this.left_guide = new THREE.Mesh( geometry, this.materials[3] );
+	this.right_guide = new THREE.Mesh( geometry, this.materials[3] );
 	sphere.position.set( 0, 0, 10 );
 	cross.position.set( 0, 0, 0 );
 	this.left_guide.position.set( 5, 0, 0 );
@@ -334,6 +354,7 @@ function Player(player_id, pos, rot, add_camera) {
 	this.old_coords = { left: this.left_guide.getWorldPosition(), right: this.right_guide.getWorldPosition() };
 	this.trail = [];
 	this.destroy = false;
+	this.fade_id = -1;
 	players.set(player_id, this);
 }
 
@@ -450,4 +471,26 @@ function destroy_player(player) {
 	}
 	scene.remove(player);
 }
+
+function explode(player) {
+	for (square of player.trail) {
+		scene.remove(square);
+	}
+	for (material of player.materials) {
+		material.transparent = true;
+	}
+	player.fade_id = setInterval(fade_away, fade_rate, player);
+}
+
+function fade_away(player) {
+	if (player.materials[0].opacity <= 0) {
+		clearInterval(player.fade_id);
+		scene.remove(player);
+	}
+	for (material of player.materials) {
+		material.opacity -= fade_increment;
+	}
+	renderer.render(scene, camera);
+}
+
 

@@ -12,7 +12,7 @@ const NORMAL_SPEED = 0.5;
 const FAST_SPEED = 3;
 const TURN_SPEED = 0.25;
 var cell_dim = 50; // Side length of cubes into which space is partitioned for collision detection purposes
-const initial_gas = 1000;
+const initial_gas = 300;
 const buffer = 20; // Determines player's new location after stepping out of bounds
 var cur_id = 0;
 var cells;
@@ -23,7 +23,7 @@ var seconds_left = initial_seconds;
 var update_id;
 var game_in_progress = false;
 var timer;
-const respawn_time = 0;
+const respawn_time = 1000;
 
 http.listen(3000, function(){
 	console.log('listening on *:3000');
@@ -43,29 +43,30 @@ function Player(player_id, socket) {
 	THREE.Object3D.call(this);
 	draw_plane.call(this);
 	this.score = 0;
-	this.oob_flag = false;
 	this.socket = socket;
 	this.x_frac = 0;
 	this.y_frac = 0; // Horizontal mouse position
 	this.click = false, // Whether mouse is depressed
 	this.player_id = player_id; // ID assigned to player
-	this.gas = initial_gas;
-	this.collision_data = [];
-	/* Change-of-basis matrix from {v1, v2, v3} to {e1, e2, e3}, where v1 and v2 are the sides of a trail square,
-	and v3 is their cross product.  Also includes the center point of the trail rectangle and a normal to the
-	trail rectangle. */
-	this.trail = []; // Coordinates of trail edges
 	deploy_player(this);
 }
 
 Player.prototype = new THREE.Object3D();
 Player.prototype.constructor = Player;
+Player.prototype.getEdges = function() {
+	var edges = [];
+	edges.push( {p1: this.left_guide.getWorldPosition(), p2: this.right_guide.getWorldPosition()} );
+	edges.push( {p1: this.top_guide.getWorldPosition(), p2: this.bottom_guide.getWorldPosition()} );
+	return edges;
+}
 
 function update_world() {
 	for ( var player of players.values() ) {
-		update_location(player);
-		send_location(player);
-		check_collisions(player);
+		if (player.deployed) {
+			update_location(player);
+			send_location(player);
+			check_collisions(player);
+		}
 	}
 }
 
@@ -75,12 +76,14 @@ function destroy_player(id, reason, redeploy) {
 	if ( players.has(id) ) {
 		let player = players.get(id);
 		console.log("Destroying", id, "because of", reason);
+		player.deployed = false;
 		io.emit("destroy", {id : id, reason : reason} );
 		for (var collision_data of player.collision_data) {
 			collision_data.cell.trails.delete(collision_data);
 		}
 		player.cell.planes.delete(id);
 		if (redeploy) {
+			console.log("Redeploying", id);
 			setTimeout(redeploy_player.bind(null, player), respawn_time);
 		}
 		else {
@@ -93,6 +96,11 @@ function destroy_player(id, reason, redeploy) {
 }
 
 function deploy_player(player) {
+	player.deployed = true;
+	player.gas = initial_gas;
+	player.collision_data = [];
+	player.trail = [];
+	player.oob_flag = false;
 	var r = Math.random() * (outer_radius - inner_radius - 2 * buffer) + inner_radius;
 	var theta = Math.random() * Math.PI;
 	var phi = Math.random() * Math.PI - Math.PI / 2;
@@ -143,7 +151,7 @@ function update_location(player) {
 		player.gas = initial_gas;
 	}
 	if (player.gas <= 0) {
-		destroy_player(player.player_id, "gas");
+		destroy_player(player.player_id, "gas", true);
 	}
 	update_trail(player);
 }
@@ -199,11 +207,11 @@ io.on("connection", function(socket) {
 			players.get(status.id).y_frac = status.y_frac;
 			players.get(status.id).click = status.click;
 		}
-		else {
-			console.log("Data received from unknown player:", status);
+		else if (status.id != -1) {
+			console.log("Data received from unknown player:", status.id);
 		}
 	});
-	socket.on("disconnect", () => destroy_player(player_id, "disconnection"));
+	socket.on( "disconnect", () => destroy_player(player_id, "disconnection", false) );
 });
 
 /* GRAPHICS */
@@ -211,8 +219,12 @@ io.on("connection", function(socket) {
 function draw_plane() {
 	this.left_guide = new THREE.Object3D();
 	this.right_guide = new THREE.Object3D();
+	this.top_guide = new THREE.Object3D();
+	this.bottom_guide = new THREE.Object3D();
 	this.left_guide.position.set(5, 0, 0);
 	this.right_guide.position.set(-5, 0, 0);
+	this.top_guide.position.set(0, 0, 10);
+	this.bottom_guide.position.set(0, 0, -10);
 	this.add(this.left_guide);
 	this.add(this.right_guide);
 }
@@ -266,7 +278,9 @@ The idea is that "matrix" represents a linear transformation which maps its asso
 square ([0, 1] x [0, 1] x {0}).  We need only check whether a point lying within the plane containing the trail
 rectangle is mapped to the unit square. */
 
-function intersects(collision_data, p1, p2) {
+function intersects(collision_data, edge /*p1, p2*/) {
+	var p1 = edge.p1;
+	var p2 = edge.p2;
 	// Find intersection between line passing through "p1" and "p2" and plane given by "collision_data".
 	var v = p2.clone();
 	v.sub(p1);
@@ -295,10 +309,10 @@ function intersects(collision_data, p1, p2) {
 function check_collisions(player) {
 	for (var neighbor of player.cell.neighbors) {
 		for (var collision_data of neighbor.trails) {
-			if ( collision_data.id != player.player_id && intersects(collision_data, player.left_guide.getWorldPosition(), player.right_guide.getWorldPosition()) ) {
+			if ( collision_data.id != player.player_id && player.getEdges().some( (edge) => intersects(collision_data, edge)) ) {
 				console.log(player.player_id, "hit", collision_data.id);
 				players.get(collision_data.id).score++;
-				destroy_player(player.player_id, "collision");
+				destroy_player(player.player_id, "collision", true);
 				return true;
 			}
 		}
