@@ -39,6 +39,9 @@ app.get("/js/three.js", function(req, res) {
 app.get("/js/client.js", function(req, res) {
 	res.sendFile(__dirname + "/js/client.js");
 });
+app.get("/test.js", function(req, res) {
+	res.sendFile(__dirname + "/test.js");
+});
 
 function Player(player_id, user_name, socket) {
 	THREE.Object3D.call(this);
@@ -109,8 +112,8 @@ function deploy_player(player) {
 	player.trail = [];
 	player.oob_flag = false;
 	var r = Math.random() * (outer_radius - inner_radius - 2 * buffer) + inner_radius;
-	var theta = Math.random() * Math.PI;
-	var phi = Math.random() * Math.PI - Math.PI / 2;
+	var theta = Math.random() * 2 * Math.PI;
+	var phi = Math.random() * Math.PI;
 	player.position.set(
 		r * Math.sin(theta) * Math.cos(phi),
 		r * Math.sin(theta) * Math.sin(phi),
@@ -126,7 +129,9 @@ function deploy_player(player) {
 	player.cell.planes.add(player.player_id);
 	for (var i = 0; i < trail_length-1; i++) {
 		player.trail.push(coords);
-		player.collision_data.push( {normal: new THREE.Vector3(0, 0, 0), cell: player.cell, id: player.player_id} );
+		let collision_datum = {normal: new THREE.Vector3(0, 0, 0), cell: player.cell, id: player.player_id}; // Just taking up space.
+		player.collision_data.push(collision_datum);
+		player.cell.trails.add(collision_datum);
 	}
 	player.trail.push(coords);
 }
@@ -144,6 +149,9 @@ function redeploy_player(player) {
 }
 
 function update_location(player) {
+	if (!player.deployed) {
+		return false;
+	} 
 	var speed = player.click ? FAST_SPEED : NORMAL_SPEED;
 	player.rotateY(-player.x_frac * speed * TURN_SPEED);
 	player.rotateX(player.y_frac * speed * TURN_SPEED);
@@ -228,15 +236,20 @@ function draw_plane() {
 	this.right_guide = new THREE.Object3D();
 	this.top_guide = new THREE.Object3D();
 	this.bottom_guide = new THREE.Object3D();
+	this.add(this.left_guide);
+	this.add(this.right_guide);
+	this.add(this.top_guide);
+	this.add(this.bottom_guide);
 	this.left_guide.position.set(5, 0, 0);
 	this.right_guide.position.set(-5, 0, 0);
 	this.top_guide.position.set(0, 0, 10);
 	this.bottom_guide.position.set(0, 0, -10);
-	this.add(this.left_guide);
-	this.add(this.right_guide);
 }
 
 function update_trail(player) {
+	if (!player.collision_data[0].cell.trails.has(player.collision_data[0])) {
+		console.log("Error!", player.collision_data[0].cell.trails);
+	}
 	player.collision_data[0].cell.trails.delete(player.collision_data[0]);
 	player.collision_data.shift();
 	var new_left = player.left_guide.getWorldPosition();
@@ -261,14 +274,14 @@ function update_trail(player) {
 	catch(e) {
 		console.log("Matrix not invertible:", matrix);
 	}
-	var center = new_left.clone();
+	var center = old_left.clone();
 	center.addScaledVector(v1, 0.5);
 	center.addScaledVector(v2, 0.5);
 	var cell = get_cell(center);
 	var collision_data = {
 		matrix: matrix,
 		normal: v3,
-		point: center,
+		point: old_left,
 		id: player.player_id,
 		cell: cell
 	};
@@ -330,7 +343,6 @@ function check_collisions(player) {
 
 function get_neighbors(x, y, z) {
 	var neighbors = new Set();
-	neighbors.add(cells[x][y][z]);
 	for (var i of [-1, 0, 1]) {
 		for (var j of [-1, 0, 1]) {
 			for (var k of [-1, 0, 1]) {
@@ -345,7 +357,7 @@ function get_neighbors(x, y, z) {
 
 function initialize_cells() {
 	cells = new Array(n);
-	for (let i = 0; i < n; i++) {
+	for (var i = 0; i < n; i++) {
 		cells[i] = new Array(n);
 		for (let j = 0; j < n; j++) {
 			cells[i][j] = new Array(n);
@@ -354,7 +366,7 @@ function initialize_cells() {
 			}
 		}
 	}
-	for (let i = 0; i < n; i++) {
+	for (var i = 0; i < n; i++) {
 		for (let j = 0; j < n; j++) {
 			for (let k = 0; k < n; k++) {
 				cells[i][j][k].neighbors = get_neighbors(i, j, k);

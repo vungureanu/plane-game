@@ -1,16 +1,16 @@
-const scene = new THREE.Scene();
+var scene;
 const game_screen = document.getElementById("game_screen");
 const renderer = new THREE.WebGLRenderer( {canvas: game_screen} );
 const frac = 19 / 20; // Proportion of screen width taken up by main game
 var seconds_left;
 var game_height = window.innerHeight * frac;
-renderer.setSize( window.innerWidth, game_height );
+renderer.setSize(window.innerWidth, game_height);
 const gas_bar = document.getElementById("gasBar");
 const gas_context = gas_bar.getContext("2d");
 const timer = document.getElementById("timer");
 game_screen.style.visibility = "hidden";
 gas_bar.style.visibility = "hidden";
-var first_round = true;
+timer.style.visibility = "hidden";
 var socket = io();
 const num_stars = 100;
 const trail_material = new THREE.MeshBasicMaterial({
@@ -38,7 +38,7 @@ const bounds_back = {
 	side: THREE.BackSide
 };
 var trail_length;
-const SEND_INTERVAL = 100; // Milliseconds between successive send operations
+const send_interval = 100; // Milliseconds between successive send operations
 const star_offset = 300;
 const field_of_view = 75;
 var outer_radius;
@@ -53,14 +53,14 @@ var own_id = -1;
 var send_data_id; // Identifies process sending data to server.
 var own_player;
 var sides = {}; // Outer boundaries of space
-var camera = new THREE.PerspectiveCamera(field_of_view, window.innerWidth/game_height, 0.1, 1000);
+var camera;
 var screen_status = "start";
 var buffer = 20;
 const vis_dist = 30;
 var results = [];
 var total_results;
 const vertical_spacing = 0.75;
-const enter_name = "\nEnter nickname: ";
+const enter_name = "\n#CONTRAILS\n\n\nEnter nickname: ";
 const start_message = "\n\n\nUse the mouse to maneuver; click to accelerate.\nTry to ensnare other players in your trail, but avoid running into other players' trails.\nIf you venture beyond the bounds of the arena, you will reappear on the opposite side.\n\n\nPress ENTER to start.\n";
 var user_name = "";
 const fade_rate = 20;
@@ -88,41 +88,39 @@ function prepare_screen() {
 prepare_screen();
 format_text(enter_name + user_name + start_message);
 
-
 function format_text(msg) {
 	prepare_screen();
 	var lines = msg.split('\n');
-	var line_height = Math.min( main_screen.height / lines.length, 32 );
-	var total_height = line_height * lines.length;
+	var length = lines.length + lines.reduce( (acc, cur) => acc + cur.charAt(0) == '#' ? 1 : 0, 0);
+	var line_height = Math.min(main_screen.height / length, 32);
+	var total_height = line_height * length;
 	var offset = (main_screen.height - total_height) / 2; 
-	screen_context.font = Math.floor(vertical_spacing * line_height) + "px serif";
 	screen_context.textBaseline = "middle";
 	screen_context.textAlign = "center";
 	screen_context.fillStyle = "rgb(255, 255, 255)";
-	for (var i = 0; i < lines.length; i++) {
-		screen_context.fillText(lines[i], main_screen.width / 2, offset + line_height * i);
+	var i = 0;
+	for (line of lines) {
+		if (line.charAt(0) == '#') {
+			screen_context.font = Math.floor(vertical_spacing * line_height) * 2 + "px serif";
+			screen_context.fillText(line.substring(1), main_screen.width / 2, offset + line_height * i);
+			i += 2;
+		}
+		else {
+			screen_context.font = Math.floor(vertical_spacing * line_height) + "px serif";
+			screen_context.fillText(line, main_screen.width / 2, offset + line_height * i);
+			i++;
+		}
 	}
 }
 
 function display_results() {
 	prepare_screen();
-	var msg = "Final results:\n\n\n"
+	var msg = "#LEADERBOARD\n\n\n"
 	for (var result of results) {
 		msg += result.user_name + ": " + result.score + "\n";
 	}
 	msg += "\n\n\nPress ENTER to continue"
 	format_text(msg);
-}
-
-function clear_players() {
-	timer.innerHTML = "";
-	for ( var player of players.values() ) {
-		remove_player(player);
-	}
-	players = new Map();
-	screen_status = "end";
-	game_screen.style.visibility = "hidden";
-	gas_bar.style.visibility = "hidden";
 }
 
 function draw_quadrilateral(p0, p1, p2, p3) {
@@ -176,18 +174,18 @@ function send_data() {
 }
 
 socket.on("update", function(status) {
-	if ( players.has(status.id) ) {
+	if ( (screen_status == "waiting" || screen_status == "game") && players.has(status.id) ) {
 		var player = players.get(status.id);
 		var rot = new THREE.Euler(status.rot._x, status.rot._y, status.rot._z, status.rot._order);
 		player.setRotationFromEuler(rot);
 		player.position.set(status.pos.x, status.pos.y, status.pos.z);
 		if (status.id == own_id) {
 			update_bounds();
+			update_gas(status.gas);
 		}
 		var new_coords = player.getCoords();
 		add_trail(player, new_coords);
 		shorten_trail(player);
-		update_gas(status.gas);
 		renderer.render(scene, camera);
 	}
 });
@@ -204,13 +202,15 @@ socket.on("id", function(status) {
 		main_screen.style.visibility = "hidden";
 		game_screen.style.visibility = "visible";
 		gas_bar.style.visibility = "visible";
+		timer.style.visibility = "visible";
 		results = [];
 		total_results = -1;
 	}
 	for (var i = 0; i < trail_length; i++) {
 		own_player.trail.push(own_player.old_coords);
 	}
-	send_data_id = setInterval(send_data, SEND_INTERVAL);
+	send_data_id = setInterval(send_data, send_interval);
+	console.log(send_data_id);
 });
 
 socket.on("add", function(status) {
@@ -240,8 +240,12 @@ socket.on("destroy", function(status) {
 });
 
 socket.on("game_over", function() {
+	console.log(send_data_id);
 	clearInterval(send_data_id);
-	clear_players();
+	screen_status = "end";
+	game_screen.style.visibility = "hidden";
+	gas_bar.style.visibility = "hidden";
+	timer.style.visibility = "hidden";
 });
 
 socket.on("config", function(config) {
@@ -250,12 +254,12 @@ socket.on("config", function(config) {
 	inner_radius = config.inner_radius;
 	outer_radius = config.outer_radius;
 	seconds_left = config.seconds_left;
-	if (first_round) {
-		draw_sun();
-		draw_background();
-		draw_bounds();
-		first_round = false;
-	}
+	players = new Map();
+	camera = new THREE.PerspectiveCamera(field_of_view, window.innerWidth/game_height, 0.1, 1000);
+	scene = new THREE.Scene();
+	//draw_sun();
+	draw_background();
+	draw_bounds();
 	update_gas();
 	draw_time();
 });
@@ -266,7 +270,6 @@ socket.on("time", function(sl) {
 });
 
 socket.on("result", function(status) {
-	console.log(status);
 	results.push( {user_name: status.user_name, score: status.score} );
 	if (results.length == total_results) {
 		results.sort( (a, b) => a.score < b.score ? -1 : 1 );
@@ -430,14 +433,6 @@ function draw_sun() {
 	scene.add(sun);
 }
 
-function add_explosion(pos) {
-	var geometry = new THREE.SphereGeometry(2, 32, 32);
-	var material = new THREE.MeshBasicMaterial( {color: 0xff00ff} );
-	var sphere = new THREE.Mesh(geometry, material);
-	sphere.position.set(pos.x, pos.y, pos.z);
-	scene.add(sphere);
-}
-
 function draw_bounds() {
 	var l = 2 * outer_radius;
 	var p0 = new THREE.Vector3(0, 0, 0);
@@ -512,5 +507,3 @@ function fade_away(player) {
 	}
 	renderer.render(scene, camera);
 }
-
-
