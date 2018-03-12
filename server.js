@@ -6,7 +6,7 @@ var players = new Map();
 const outer_radius = 150;
 const center = new THREE.Vector3(outer_radius, outer_radius, outer_radius);
 const inner_radius = 50;
-const REFRESH_TIME = 100; // Milliseconds between successive refreshes
+const refresh_time = 100; // Milliseconds between successive refreshes
 const trail_length = 100; // Maximum number of rectangles in plane's trail
 const NORMAL_SPEED = 0.5;
 const FAST_SPEED = 3;
@@ -61,7 +61,7 @@ function Player(player_id, user_name, socket) {
 	deploy_player(this);
 }
 
-Player.prototype = new THREE.Object3D();
+Player.prototype = Object.create(THREE.Object3D.prototype);
 Player.prototype.constructor = Player;
 Player.prototype.getEdges = function() {
 	var edges = [];
@@ -186,7 +186,7 @@ io.on("connection", function(socket) {
 	console.log("New connection from", socket.handshake.address);
 	socket.on("start", function(user_name) {
 		if (!game_in_progress) {
-			update_id = setInterval(update_world, REFRESH_TIME);
+			update_id = setInterval(update_world, refresh_time);
 			timer = setInterval(count_down, 1000);
 			game_in_progress = true;
 		}
