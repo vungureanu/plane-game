@@ -8,7 +8,7 @@ Documentation:
 
 The following variables can be configured on the server side:
 
-(1) "initial_gas": amount of gas each player initially receives
+(1) "initial_gas": amount of gas each player initially receives\n
 (2) "outer_radius": half of width/length/height of the playing area
 (3) "cell_dim": dimension of the cubes into which the playing area is partitioned  Decreasing the dimension requires more memory, but boosts performance
 (4) "refresh_time": time (in milliseconds) between successive updates of the game state.
