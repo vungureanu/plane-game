@@ -13,6 +13,7 @@ gas_bar.style.visibility = "hidden";
 timer.style.visibility = "hidden";
 var socket = io();
 const num_stars = 100;
+const moon_texture = new THREE.TextureLoader().load("textures/moon.jpg");
 const trail_material = new THREE.MeshBasicMaterial({
 		color: 0x0000ff,
 		side : THREE.DoubleSide,
@@ -45,8 +46,8 @@ var outer_radius;
 var inner_radius;
 var initial_gas;
 // Distance of mouse away from center, as fraction of the canvas's width or height
-var x_frac = 0;
-var y_frac = 0;
+var x_frac;
+var y_frac;
 var players = new Map(); // State (spatial coordinates and orientation) of all other players
 var click = false; // Whether mouse is depressed.
 var own_id = -1;
@@ -123,35 +124,23 @@ function display_results() {
 	format_text(msg);
 }
 
-function draw_quadrilateral(p0, p1, p2, p3) {
+function draw_polygon(vertex_array) {
 	var geometry = new THREE.Geometry();
-	geometry.vertices[0] = p0;
-	geometry.vertices[1] = p1;
-	geometry.vertices[2] = p2;
-	geometry.vertices[3] = p3;
-	geometry.faces.push( new THREE.Face3(0, 1, 2) );
-	geometry.faces.push( new THREE.Face3(0, 2, 3) );
+	for (var i = 0; i < vertex_array.length; i++) {
+		geometry.vertices[i] = vertex_array[i];
+	}
+	for (var i = 0; i < vertex_array.length - 1; i++) {
+		geometry.faces.push( new THREE.Face3(0, i, i+1) );
+	}
 	return geometry;
 }
 
-// Adds a rectangle to a player's trail, removing oldest rectangle if necessary.
 function add_trail(player, new_coords) {
 	if (player.old_coords.left.distanceTo(new_coords.left) > outer_radius / 2) {
 		player.old_coords = new_coords;
 	}
-	var triangleGeometry = new THREE.Geometry();
-	triangleGeometry.vertices[0] = player.old_coords.left;
-	triangleGeometry.vertices[1] = player.old_coords.right;
-	triangleGeometry.vertices[2] = new_coords.left;
-	triangleGeometry.vertices[3] = new_coords.right;
-	triangleGeometry.faces.push( new THREE.Face3(0, 1, 2) );
-	triangleGeometry.faces.push( new THREE.Face3(1, 2, 3) );
-	if (player.player_id == own_id) {
-		var square = new THREE.Mesh(triangleGeometry, own_material);
-	}
-	else {
-		var square = new THREE.Mesh(triangleGeometry, trail_material);
-	}
+	var geometry = draw_polygon( [player.old_coords.left, player.old_coords.right, new_coords.right, new_coords.left] );
+	var square = player.player_id == own_id ? new THREE.Mesh(geometry, own_material) : new THREE.Mesh(geometry, trail_material);
 	player.trail.push(square);
 	scene.add(square);
 	player.old_coords = new_coords;
@@ -166,10 +155,10 @@ function shorten_trail(player) {
 
 function send_data() {
 	socket.emit("status", {
-		id : own_id,
-		x_frac : x_frac,
-		y_frac : y_frac,
-		click : click
+		id: own_id,
+		x_frac: x_frac,
+		y_frac: y_frac,
+		click: click
 	});
 }
 
@@ -210,7 +199,6 @@ socket.on("id", function(status) {
 		own_player.trail.push(own_player.old_coords);
 	}
 	send_data_id = setInterval(send_data, send_interval);
-	console.log(send_data_id);
 });
 
 socket.on("add", function(status) {
@@ -231,16 +219,11 @@ socket.on("destroy", function(status) {
 	if (status.id == own_id) {
 		clearInterval(send_data_id);
 		own_id = -1;
-		if (status.reason == "gas") {
-			gas = 0;
-			update_gas();
-		}
 	}
 	renderer.render(scene, camera);
 });
 
 socket.on("game_over", function() {
-	console.log(send_data_id);
 	clearInterval(send_data_id);
 	screen_status = "end";
 	game_screen.style.visibility = "hidden";
@@ -257,7 +240,7 @@ socket.on("config", function(config) {
 	players = new Map();
 	camera = new THREE.PerspectiveCamera(field_of_view, window.innerWidth/game_height, 0.1, 1000);
 	scene = new THREE.Scene();
-	//draw_sun();
+	draw_moon();
 	draw_background();
 	draw_bounds();
 	update_gas();
@@ -340,33 +323,37 @@ window.addEventListener("mouseup", function() {
 function Player(player_id, pos, rot, add_camera) {
 	THREE.Object3D.call(this);
 	this.materials = [
-		new THREE.MeshBasicMaterial( {color: 0x0000ff} ),
-		new THREE.MeshBasicMaterial( {color: 0xff00ff} ),
-		new THREE.MeshBasicMaterial( {color: 0x0000ff} ),
-		new THREE.MeshBasicMaterial( {color: 0xff0000} )
+		new THREE.MeshBasicMaterial( {color: 0x0000ff, side: THREE.DoubleSide} ),
+		new THREE.MeshBasicMaterial( {color: 0xff00ff, side: THREE.DoubleSide} ),
+		new THREE.MeshBasicMaterial( {color: 0x0000ff, side: THREE.DoubleSide} ),
+		new THREE.MeshBasicMaterial( {color: 0xff0000, side: THREE.DoubleSide} )
 	];
-	var geometry = new THREE.BoxGeometry( 1, 1, 20 );
-	var cube = new THREE.Mesh( geometry, this.materials[0] );
-	var geometry = new THREE.SphereGeometry( 2, 32, 32 );
-	var sphere = new THREE.Mesh( geometry, this.materials[1] );
-	var geometry = new THREE.BoxGeometry( 10, 1, 1 );
-	var cross = new THREE.Mesh( geometry, this.materials[2] );
-	var geometry = new THREE.SphereGeometry( 1, 32, 32 );
-	this.left_guide = new THREE.Mesh( geometry, this.materials[3] );
-	this.right_guide = new THREE.Mesh( geometry, this.materials[3] );
-	sphere.position.set( 0, 0, 10 );
-	cross.position.set( 0, 0, 0 );
-	this.left_guide.position.set( 5, 0, 0 );
-	this.right_guide.position.set( -5, 0, 0 );
-	this.add(cube);
-	this.add(sphere);
-	this.add(cross);
+	var top = [
+		new THREE.Vector3(0, 15, 1),
+		new THREE.Vector3(-10, 0, 1),
+		new THREE.Vector3(0, 5, 1),
+		new THREE.Vector3(10, 0, 1)
+	];
+	var bot = top.map( (v) => new THREE.Vector3(v.x, v.y, -v.z) );
+	var top_shape = new THREE.Mesh( draw_polygon( [top[0], top[1], top[2], top[3]] ), this.materials[0] );
+	var bot_shape = new THREE.Mesh( draw_polygon( [bot[0], bot[1], bot[2], bot[3]] ), this.materials[0] );
+	for (var i = 0; i < 4; i++) {
+		let j = (i + 1) % 4;
+		let shape = new THREE.Mesh( draw_polygon( [top[i], top[j], bot[j], bot[i]] ), this.materials[1] );
+		this.add(shape);
+	}
+	this.left_guide = new THREE.Object3D();
+	this.right_guide = new THREE.Object3D();
+	this.left_guide.position.set(-10, 0, 0);
+	this.right_guide.position.set(10, 0, 0);
 	this.add(this.left_guide);
 	this.add(this.right_guide);
+	this.add(top_shape);
+	this.add(bot_shape);
 	if (add_camera == true) {
 		this.add(camera);
-		camera.position.set(0, 0, -25);
-		camera.lookAt(0, 0, 0);
+		camera.position.set(0, -25, 5);
+		camera.lookAt(0, 10, 1);
 	}
 	this.position.set(pos.x, pos.y, pos.z);
 	this.setRotationFromEuler( new THREE.Euler(rot._x, rot._y, rot._z, rot._order) );
@@ -419,16 +406,11 @@ function update_gas(gas) {
 	gas_context.fillRect(0, 0, gas_bar.width * frac, gas_bar.height);
 }
 
-function draw_sun() {
-	var material = new THREE.MeshBasicMaterial({
-		color: 0xffff11,
-		transparent: true,
-		opacity: 0.5,
-		side: THREE.DoubleSide
-	});
+function draw_moon() {
+	var material = new THREE.MeshBasicMaterial( {map: moon_texture} );
 	var geometry = new THREE.SphereGeometry(inner_radius, 32, 32);
 	var sun = new THREE.Mesh(geometry, material);
-	sun.renderOrder = 1;
+	sun.renderOrder = 0;
 	sun.position.set(outer_radius, outer_radius, outer_radius);
 	scene.add(sun);
 }
@@ -443,22 +425,22 @@ function draw_bounds() {
 	var p5 = new THREE.Vector3(l, 0, l);
 	var p6 = new THREE.Vector3(l, l, l);
 	var p7 = new THREE.Vector3(l, l, 0);
-	var geometry0 = draw_quadrilateral(p0, p1, p2, p3);
+	var geometry0 = draw_polygon( [p0, p1, p2, p3] );
 	sides.x0 = new THREE.MeshBasicMaterial(bounds_back);
 	scene.add( new THREE.Mesh(geometry0, sides.x0) );
-	var geometry1 = draw_quadrilateral(p4, p5, p6, p7);
+	var geometry1 = draw_polygon( [p4, p5, p6, p7] );
 	sides.x1 = new THREE.MeshBasicMaterial(bounds_front);
 	scene.add( new THREE.Mesh(geometry1, sides.x1) );
-	var geometry2 = draw_quadrilateral(p0, p1, p5, p4);
+	var geometry2 = draw_polygon( [p0, p1, p5, p4] );
 	sides.y0 = new THREE.MeshBasicMaterial(bounds_front);
 	scene.add( new THREE.Mesh(geometry2, sides.y0) );
-	var geometry3 = draw_quadrilateral(p3, p2, p6, p7);
+	var geometry3 = draw_polygon( [p3, p2, p6, p7] );
 	sides.y1 = new THREE.MeshBasicMaterial(bounds_back);
 	scene.add( new THREE.Mesh(geometry3, sides.y1) );
-	var geometry4 = draw_quadrilateral(p0, p3, p7, p4); 
+	var geometry4 = draw_polygon( [p0, p3, p7, p4] ); 
 	sides.z0 = new THREE.MeshBasicMaterial(bounds_back);
 	scene.add( new THREE.Mesh(geometry4, sides.z0) );
-	var geometry5 = draw_quadrilateral(p1, p2, p6, p5);
+	var geometry5 = draw_polygon( [p1, p2, p6, p5] );
 	sides.z1 = new THREE.MeshBasicMaterial(bounds_front);
 	scene.add( new THREE.Mesh(geometry5, sides.z1) );
 }

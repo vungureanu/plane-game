@@ -42,6 +42,10 @@ app.get("/js/client.js", function(req, res) {
 app.get("/test.js", function(req, res) {
 	res.sendFile(__dirname + "/test.js");
 });
+app.get("/textures/moon.jpg", function(req, res) {
+	console.log("OK.");
+	res.sendFile(__dirname + "/textures/moon.jpg");
+});
 
 function Player(player_id, user_name, socket) {
 	THREE.Object3D.call(this);
@@ -66,7 +70,8 @@ Player.prototype.constructor = Player;
 Player.prototype.getEdges = function() {
 	var edges = [];
 	edges.push( {p1: this.left_guide.getWorldPosition(), p2: this.right_guide.getWorldPosition()} );
-	edges.push( {p1: this.top_guide.getWorldPosition(), p2: this.bottom_guide.getWorldPosition()} );
+	edges.push( {p1: this.top_guide.getWorldPosition(), p2: this.left_guide.getWorldPosition()} );
+	edges.push( {p1: this.top_guide.getWorldPosition(), p2: this.right_guide.getWorldPosition()} );
 	return edges;
 }
 
@@ -152,21 +157,18 @@ function update_location(player) {
 	if (!player.deployed) {
 		return false;
 	} 
-	var speed = player.click ? FAST_SPEED : NORMAL_SPEED;
-	player.rotateY(-player.x_frac * speed * TURN_SPEED);
-	player.rotateX(player.y_frac * speed * TURN_SPEED);
-	player.translateZ(speed);
+	var speed = (player.click && player.gas > 0) ? FAST_SPEED : NORMAL_SPEED;
+	player.rotateZ(-player.x_frac * speed * TURN_SPEED);
+	player.rotateX(-player.y_frac * speed * TURN_SPEED);
+	player.translateY(speed);
 	player.updateMatrixWorld();
 	alter_bounds(player);
 	player.cell.planes.delete(player.player_id);
 	player.cell = get_cell(player.position);
 	player.cell.planes.add(player.player_id);
-	player.gas -= speed;
+	player.gas += 1.5 * NORMAL_SPEED - speed; 
 	if (player.position.distanceToSquared(center) <= inner_radius * inner_radius) {
-		player.gas = initial_gas;
-	}
-	if (player.gas <= 0) {
-		destroy_player(player.player_id, "gas", true);
+		destroy_player(player.player_id, "crash", true);
 	}
 	update_trail(player);
 }
@@ -232,6 +234,12 @@ io.on("connection", function(socket) {
 /* GRAPHICS */
 
 function draw_plane() {
+	var vertices = [
+		new THREE.Vector3(0, 15, 0),
+		new THREE.Vector3(-10, 0, 0),
+		new THREE.Vector3(0, 5, 0),
+		new THREE.Vector3(10, 0, 0)
+	];
 	this.left_guide = new THREE.Object3D();
 	this.right_guide = new THREE.Object3D();
 	this.top_guide = new THREE.Object3D();
@@ -240,10 +248,10 @@ function draw_plane() {
 	this.add(this.right_guide);
 	this.add(this.top_guide);
 	this.add(this.bottom_guide);
-	this.left_guide.position.set(5, 0, 0);
-	this.right_guide.position.set(-5, 0, 0);
-	this.top_guide.position.set(0, 0, 10);
-	this.bottom_guide.position.set(0, 0, -10);
+	this.left_guide.position.set(-10, 0, 0);
+	this.right_guide.position.set(10, 0, 0);
+	this.top_guide.position.set(0, 15, 0);
+	this.bottom_guide.position.set(0, 5, 0);
 }
 
 function update_trail(player) {
