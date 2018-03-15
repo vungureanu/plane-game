@@ -43,7 +43,6 @@ app.get("/test.js", function(req, res) {
 	res.sendFile(__dirname + "/test.js");
 });
 app.get("/textures/moon.jpg", function(req, res) {
-	console.log("OK.");
 	res.sendFile(__dirname + "/textures/moon.jpg");
 });
 

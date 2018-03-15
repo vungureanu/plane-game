@@ -46,8 +46,8 @@ var outer_radius;
 var inner_radius;
 var initial_gas;
 // Distance of mouse away from center, as fraction of the canvas's width or height
-var x_frac;
-var y_frac;
+var x_frac = 0;
+var y_frac = 0;
 var players = new Map(); // State (spatial coordinates and orientation) of all other players
 var click = false; // Whether mouse is depressed.
 var own_id = -1;
@@ -255,7 +255,7 @@ socket.on("time", function(sl) {
 socket.on("result", function(status) {
 	results.push( {user_name: status.user_name, score: status.score} );
 	if (results.length == total_results) {
-		results.sort( (a, b) => a.score < b.score ? -1 : 1 );
+		results.sort( (a, b) => a.score > b.score ? -1 : 1 );
 		display_results();
 	}
 });
@@ -263,7 +263,7 @@ socket.on("result", function(status) {
 socket.on("results_sent", function(length) {
 	total_results = length;
 	if (results.length == total_results) {
-		results.sort( (a, b) => a.score < b.score ? -1 : 1 );
+		results.sort( (a, b) => a.score > b.score ? -1 : 1 );
 		display_results();
 	}
 });
