@@ -8,13 +8,29 @@ renderer.setSize(window.innerWidth, game_height);
 const gas_bar = document.getElementById("gasBar");
 const gas_context = gas_bar.getContext("2d");
 const timer = document.getElementById("timer");
-game_screen.style.visibility = "hidden";
-gas_bar.style.visibility = "hidden";
-timer.style.visibility = "hidden";
 var socket = io();
 const num_stars = 100;
-const moon_texture = new THREE.TextureLoader().load("textures/moon.jpg");
-const trail_material = new THREE.MeshBasicMaterial({
+const moon_texture = new THREE.TextureLoader().load("resources/moon.jpg");
+var plane_template;
+var standard_material;
+const slow_rotate = 0.3;
+const fast_rotate = 0.6;
+const mtlLoader = new THREE.MTLLoader();
+mtlLoader.setPath('resources/plane_data/');
+mtlLoader.load('plane.mtl', function(materials) {
+	materials.preload();
+	var objLoader = new THREE.OBJLoader();
+	objLoader.setMaterials(materials);
+	objLoader.setPath('resources/plane_data/');
+	objLoader.load('plane.obj', function(object) {
+		plane_template = object;
+		standard_material = plane_template.children[0].material;
+	});
+	objLoader.load('prop.obj', function(object) {
+		prop_template = object;
+	});
+});
+const trail_material = new THREE.MeshStandardMaterial({
 		color: 0x0000ff,
 		side : THREE.DoubleSide,
 		transparent : true,
@@ -59,7 +75,7 @@ var screen_status = "start";
 var buffer = 20;
 const vis_dist = 30;
 var results = [];
-var total_results;
+var total_results = -1;
 const vertical_spacing = 0.75;
 const enter_name = "\n#CONTRAILS\n\n\nEnter nickname: ";
 const start_message = "\n\n\nUse the mouse to maneuver; click to accelerate.\nTry to ensnare other players in your trail, but avoid running into other players' trails.\nIf you venture beyond the bounds of the arena, you will reappear on the opposite side.\n\n\nPress ENTER to start.\n";
@@ -73,11 +89,9 @@ const accepted_characters = /[0-9 + a-z + A-Z + _]/;
 const main_screen = document.getElementById("main_screen");
 main_screen.width = window.innerWidth;
 main_screen.height = window.innerHeight;
-main_screen.style.visibility = "visible";
 const screen_context = main_screen.getContext("2d");
 
 function prepare_screen() {
-	main_screen.style.visibility = "visible";
 	main_screen.height = window.innerHeight;
 	main_screen.width = window.innerWidth;
 	screen_context.clearRect(0, 0, main_screen.width, main_screen.height);
@@ -100,14 +114,14 @@ function format_text(msg) {
 	screen_context.textAlign = "center";
 	screen_context.fillStyle = "rgb(255, 255, 255)";
 	var i = 0;
-	for (line of lines) {
+	for (var line of lines) {
 		if (line.charAt(0) == '#') {
-			screen_context.font = Math.floor(vertical_spacing * line_height) * 2 + "px serif";
+			screen_context.font = Math.floor(vertical_spacing * line_height) * 2 + "px monospace";
 			screen_context.fillText(line.substring(1), main_screen.width / 2, offset + line_height * i);
 			i += 2;
 		}
 		else {
-			screen_context.font = Math.floor(vertical_spacing * line_height) + "px serif";
+			screen_context.font = Math.floor(vertical_spacing * line_height) + "px monospace";
 			screen_context.fillText(line, main_screen.width / 2, offset + line_height * i);
 			i++;
 		}
@@ -116,12 +130,19 @@ function format_text(msg) {
 
 function display_results() {
 	prepare_screen();
+	if (results.length == 0) { // Perhaps the player joined the game right at the end, and has received only the "results_sent" message 
+		format_text(enter_name + user_name + start_message);
+		return false;
+	}
 	var msg = "#LEADERBOARD\n\n\n"
+	maximum_length = results.map(el => el.user_name.length).reduce( (prev, cur) => Math.max(prev, cur) );
 	for (var result of results) {
-		msg += result.user_name + ": " + result.score + "\n";
+		msg += result.user_name + " ".repeat(maximum_length - result.user_name.length + 3) + result.score + "\n";
 	}
 	msg += "\n\n\nPress ENTER to continue"
 	format_text(msg);
+	results = [];
+	total_results = -1;
 }
 
 function draw_polygon(vertex_array) {
@@ -132,6 +153,8 @@ function draw_polygon(vertex_array) {
 	for (var i = 0; i < vertex_array.length - 1; i++) {
 		geometry.faces.push( new THREE.Face3(0, i, i+1) );
 	}
+	geometry.computeFaceNormals();
+	geometry.computeVertexNormals();
 	return geometry;
 }
 
@@ -163,7 +186,7 @@ function send_data() {
 }
 
 socket.on("update", function(status) {
-	if ( (screen_status == "waiting" || screen_status == "game") && players.has(status.id) ) {
+	if ( (screen_status == "waiting" || screen_status == "game") && players.has(status.id) && !players.get(status.id).destroyed ) {
 		var player = players.get(status.id);
 		var rot = new THREE.Euler(status.rot._x, status.rot._y, status.rot._z, status.rot._order);
 		player.setRotationFromEuler(rot);
@@ -172,7 +195,8 @@ socket.on("update", function(status) {
 			update_bounds();
 			update_gas(status.gas);
 		}
-		var new_coords = player.getCoords();
+		player.prop.rotateY(click ? fast_rotate : slow_rotate);
+		var new_coords = get_coords(player);
 		add_trail(player, new_coords);
 		shorten_trail(player);
 		renderer.render(scene, camera);
@@ -184,16 +208,11 @@ socket.on("id", function(status) {
 		own_player.remove(camera);
 	}
 	own_id = status.id;
-	own_player = new Player(status.id, status.pos, status.rot, true);
+	own_player = create_player(status.id, status.pos, status.rot, true);
 	renderer.render(scene, camera);
 	if (screen_status == "waiting") {
 		screen_status = "game";
-		main_screen.style.visibility = "hidden";
-		game_screen.style.visibility = "visible";
-		gas_bar.style.visibility = "visible";
-		timer.style.visibility = "visible";
-		results = [];
-		total_results = -1;
+		set_visibility("game");
 	}
 	for (var i = 0; i < trail_length; i++) {
 		own_player.trail.push(own_player.old_coords);
@@ -202,7 +221,7 @@ socket.on("id", function(status) {
 });
 
 socket.on("add", function(status) {
-	var player = new Player(status.id, status.pos, status.rot, false);
+	var player = create_player(status.id, status.pos, status.rot, false);
 	for ( var i = 0; i < trail_length; i++ ) {
 		var new_coords = {
 			left : new THREE.Vector3( status.trail[i].left.x, status.trail[i].left.y, status.trail[i].left.z ),
@@ -226,9 +245,7 @@ socket.on("destroy", function(status) {
 socket.on("game_over", function() {
 	clearInterval(send_data_id);
 	screen_status = "end";
-	game_screen.style.visibility = "hidden";
-	gas_bar.style.visibility = "hidden";
-	timer.style.visibility = "hidden";
+	set_visibility("text");
 });
 
 socket.on("config", function(config) {
@@ -245,6 +262,7 @@ socket.on("config", function(config) {
 	draw_bounds();
 	update_gas();
 	draw_time();
+	draw_lights();
 });
 
 socket.on("time", function(sl) {
@@ -320,57 +338,50 @@ window.addEventListener("mouseup", function() {
 
 /* GRAPHICS */
 
-function Player(player_id, pos, rot, add_camera) {
-	THREE.Object3D.call(this);
-	this.materials = [
-		new THREE.MeshBasicMaterial( {color: 0x0000ff, side: THREE.DoubleSide} ),
-		new THREE.MeshBasicMaterial( {color: 0xff00ff, side: THREE.DoubleSide} ),
-		new THREE.MeshBasicMaterial( {color: 0x0000ff, side: THREE.DoubleSide} ),
-		new THREE.MeshBasicMaterial( {color: 0xff0000, side: THREE.DoubleSide} )
-	];
-	var top = [
-		new THREE.Vector3(0, 15, 1),
-		new THREE.Vector3(-10, 0, 1),
-		new THREE.Vector3(0, 5, 1),
-		new THREE.Vector3(10, 0, 1)
-	];
-	var bot = top.map( (v) => new THREE.Vector3(v.x, v.y, -v.z) );
-	var top_shape = new THREE.Mesh( draw_polygon( [top[0], top[1], top[2], top[3]] ), this.materials[0] );
-	var bot_shape = new THREE.Mesh( draw_polygon( [bot[0], bot[1], bot[2], bot[3]] ), this.materials[0] );
-	for (var i = 0; i < 4; i++) {
-		let j = (i + 1) % 4;
-		let shape = new THREE.Mesh( draw_polygon( [top[i], top[j], bot[j], bot[i]] ), this.materials[1] );
-		this.add(shape);
+function create_player(player_id, pos, rot, add_camera) {
+	var player = plane_template.clone();
+	player.prop = prop_template.clone();
+	player.prop.position.set(0, 5.7, 0.8);
+	player.add(player.prop);
+	player.material_used = standard_material.clone();
+	for (var child of player.children) {
+		child.material = player.material_used;
 	}
-	this.left_guide = new THREE.Object3D();
-	this.right_guide = new THREE.Object3D();
-	this.left_guide.position.set(-10, 0, 0);
-	this.right_guide.position.set(10, 0, 0);
-	this.add(this.left_guide);
-	this.add(this.right_guide);
-	this.add(top_shape);
-	this.add(bot_shape);
+	player.left_guide = new THREE.Object3D();
+	player.right_guide = new THREE.Object3D();
+	player.left_guide.position.set(-7, 2, 0);
+	player.right_guide.position.set(7, 2, 0);
+	player.add(player.left_guide);
+	player.add(player.right_guide);
+	player.upper_light = new THREE.PointLight(0xffffff, 3, 35);
+	player.upper_light.position.set(0, -20, 0);
+	player.add(player.upper_light);
 	if (add_camera == true) {
-		this.add(camera);
-		camera.position.set(0, -25, 5);
-		camera.lookAt(0, 10, 1);
+		player.add(camera);
+		camera.position.set(0, -25, 0);
+		camera.lookAt(0, 1, 0);
+		player.light = new THREE.SpotLight(0xffffff, 3, 200);
+		player.light.target = new THREE.Object3D();
+		player.add(player.light.target);
+		player.light.target.position.set(0, 1, 0);
+		player.add(player.light);
+		player.light.position.set(0, 0, 0);
 	}
-	this.position.set(pos.x, pos.y, pos.z);
-	this.setRotationFromEuler( new THREE.Euler(rot._x, rot._y, rot._z, rot._order) );
-	this.updateMatrixWorld();
-	scene.add(this);
-	this.player_id = player_id;
-	this.old_coords = { left: this.left_guide.getWorldPosition(), right: this.right_guide.getWorldPosition() };
-	this.trail = [];
-	this.destroy = false;
-	this.fade_id = -1;
-	players.set(player_id, this);
+	player.position.set(pos.x, pos.y, pos.z);
+	player.setRotationFromEuler( new THREE.Euler(rot._x, rot._y, rot._z, rot._order) );
+	player.updateMatrixWorld();
+	scene.add(player);
+	player.player_id = player_id;
+	player.old_coords = { left: player.left_guide.getWorldPosition(), right: player.right_guide.getWorldPosition() };
+	player.trail = [];
+	player.fade_id = -1;
+	player.destroyed = false;
+	players.set(player_id, player);
+	return player;
 }
 
-Player.prototype = new THREE.Object3D();
-Player.prototype.constructor = Player;
-Player.prototype.getCoords = function() {
-	return { left: this.left_guide.getWorldPosition(), right: this.right_guide.getWorldPosition() };
+function get_coords(player) {
+	return { left: player.left_guide.getWorldPosition(), right: player.right_guide.getWorldPosition() };
 }
 
 function draw_background() {
@@ -407,12 +418,17 @@ function update_gas(gas) {
 }
 
 function draw_moon() {
-	var material = new THREE.MeshBasicMaterial( {map: moon_texture} );
+	var material = new THREE.MeshPhongMaterial( {map: moon_texture} );
 	var geometry = new THREE.SphereGeometry(inner_radius, 32, 32);
 	var sun = new THREE.Mesh(geometry, material);
 	sun.renderOrder = 0;
 	sun.position.set(outer_radius, outer_radius, outer_radius);
 	scene.add(sun);
+}
+
+function draw_lights() {
+	var light = new THREE.AmbientLight(0xffffff, 1);
+	//scene.add(light);
 }
 
 function draw_bounds() {
@@ -460,32 +476,52 @@ function draw_time() {
 /* MISC */
 
 function remove_player(player) {
-	for (square of player.trail) {
+	for (var square of player.trail) {
 		scene.remove(square);
 	}
 	if (player.player_id == own_id) {
 		player.remove(camera);
 	}
 	scene.remove(player);
+	scene.remove(player.light);
 }
 
 function explode(player) {
-	for (square of player.trail) {
+	player.destroyed = true;
+	for (var square of player.trail) {
 		scene.remove(square);
 	}
-	for (material of player.materials) {
-		material.transparent = true;
-	}
+	player.material_used.transparent = true;
 	player.fade_id = setInterval(fade_away, fade_rate, player);
 }
 
 function fade_away(player) {
-	if (player.materials[0].opacity <= 0) {
+	if (player.material_used.opacity <= 0) {
+		players.delete(player.player_id);
 		clearInterval(player.fade_id);
 		scene.remove(player);
+		scene.remove(player.light);
+		scene.remove(player.upper_light);
+		scene.remove(player.prop);
 	}
-	for (material of player.materials) {
-		material.opacity -= fade_increment;
+	else {
+		player.material_used.opacity -= fade_increment;
 	}
 	renderer.render(scene, camera);
 }
+
+function set_visibility(type) {
+	if (type == "game") {
+		main_screen.style.visibility = "hidden";
+		game_screen.style.visibility = "visible";
+		gas_bar.style.visibility = "visible";
+		timer.style.visibility = "visible";
+	}
+	else if (type == "text") {
+		main_screen.style.visibility = "visible";
+		game_screen.style.visibility = "hidden";
+		gas_bar.style.visibility = "hidden";
+		timer.style.visibility = "hidden";
+	}
+}
+set_visibility("text");

@@ -4,9 +4,76 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 var camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
 var scene = new THREE.Scene();
 scene.add(camera);
-camera.position.set(0, 0, -50);
-camera.lookAt(0, 0, 0);
+var model;
+camera.position.set(0, 125, -125);
+var mtlLoader = new THREE.MTLLoader();
+mtlLoader.setPath('textures/p6/');
+mtlLoader.load('plane.mtl', function(materials) {
+	materials.preload();
+	var objLoader = new THREE.OBJLoader();
+	objLoader.setMaterials(materials);
+	objLoader.setPath('textures/p6/');
+	objLoader.load('plane5.obj', function(object) {
+		scene.add(object);
+		camera.lookAt(object);
+		renderer.render(scene, camera);
+	});
+	objLoader.load('prop.obj', function(object) {
+		scene.add(object);
+		object.position.set(0, 5.7, 0.8);
+		camera.lookAt(object);
+		renderer.render(scene, camera);
+	});
+});
 const own_material = new THREE.MeshBasicMaterial({
+		color: 0x00ff00,
+		side : THREE.DoubleSide,
+		transparent : true,
+		opacity: 0.5
+});
+window.addEventListener("keydown", function(e) {
+	console.log(e.key);
+	if (e.key == "x") {
+		model.rotateX(0.1);
+	}
+	if (e.key == "y") {
+		model.rotateY(0.1);
+	}
+	if (e.key == "z") {
+		model.rotateZ(0.1);
+	}
+	console.log(model.rotation);
+});
+var light = new THREE.AmbientLight(0xffffff, 1);
+scene.add(light);
+/*var sg = new THREE.SphereGeometry(3, 32, 32);
+var sph = new THREE.Mesh(sg, own_material);
+scene.add(sph);
+sph.position.set(0, 0, 0);
+var sph = new THREE.Mesh(sg, own_material);
+scene.add(sph);
+sph.position.set(-10, 0, 0);
+var sph = new THREE.Mesh(sg, own_material);
+scene.add(sph);
+sph.position.set(10, 0, 0);
+var sph = new THREE.Mesh(sg, own_material);
+scene.add(sph);
+sph.position.set(0, 10, 0);
+var sph = new THREE.Mesh(sg, own_material);
+scene.add(sph);
+sph.position.set(0, 0, 5);*/
+var controls = new THREE.OrbitControls( camera );
+function animate() {
+	requestAnimationFrame( animate );
+
+	// required if controls.enableDamping or controls.autoRotate are set to true
+	controls.update();
+
+	renderer.render( scene, camera );
+
+}
+animate();
+/*const own_material = new THREE.MeshBasicMaterial({
 		color: 0x00ff00,
 		side : THREE.DoubleSide,
 		transparent : true,
@@ -56,7 +123,7 @@ function get_cd(old_left, old_right, new_left, edge) {
 	return intersects(collision_data, edge);
 }
 
-function intersects(collision_data, edge /*p1, p2*/) {
+function intersects(collision_data, edge p1, p2) {
 	var p1 = edge.p1;
 	var p2 = edge.p2;
 	// Find intersection between line passing through "p1" and "p2" and plane given by "collision_data".
@@ -135,4 +202,4 @@ setInterval( function() {
 	camera.position.set( 0, 50 * Math.cos(theta), 50 * Math.sin(theta) );
 	camera.lookAt(0, 0, 0);
 	renderer.render(scene, camera);
-}, 1000);
+}, 1000);*/

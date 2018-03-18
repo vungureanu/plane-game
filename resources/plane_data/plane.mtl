@@ -1,0 +1,5 @@
+newmtl BodyTexture_1
+Ni 1.0
+d 1.0
+illum 2
+map_Kd BodyTexture.bmp

@@ -1,11 +1,15 @@
-var app = require("express")();
+var exp = require("express");
+var app = exp();
 var http = require("http").createServer(app);
 var io = require("socket.io")(http);
 var THREE = require("three");
 var players = new Map();
-const outer_radius = 150;
+const outer_radius = 200;
 const center = new THREE.Vector3(outer_radius, outer_radius, outer_radius);
-const inner_radius = 50;
+const inner_radius = 100;
+const side_length = 15;
+const radius_buffer_squared = Math.pow(inner_radius + side_length, 2);
+const radius_squared = Math.pow(inner_radius, 2);
 const refresh_time = 100; // Milliseconds between successive refreshes
 const trail_length = 100; // Maximum number of rectangles in plane's trail
 const NORMAL_SPEED = 0.5;
@@ -30,31 +34,17 @@ http.listen(3000, function(){
 	console.log('listening on *:3000');
 });
 
-app.get("/", function(req, res) {
-	res.sendFile(__dirname + "/index.html");
-});
-app.get("/js/three.js", function(req, res) {
-	res.sendFile(__dirname + "/js/three.js");
-});
-app.get("/js/client.js", function(req, res) {
-	res.sendFile(__dirname + "/js/client.js");
-});
-app.get("/test.js", function(req, res) {
-	res.sendFile(__dirname + "/test.js");
-});
-app.get("/textures/moon.jpg", function(req, res) {
-	res.sendFile(__dirname + "/textures/moon.jpg");
-});
+app.use(exp.static(__dirname));
 
 function Player(player_id, user_name, socket) {
 	THREE.Object3D.call(this);
 	draw_plane.call(this);
 	this.score = 0;
 	if ( user_name.match(accepted_characters) ) {
-		this.user_name = user_name;
+		this.user_name = user_name.substring(0, 16);
 	}
 	else {
-		this.user_name = "guest";
+		this.user_name = "guest" + player_id;
 	}
 	this.socket = socket;
 	this.x_frac = 0;
@@ -69,8 +59,8 @@ Player.prototype.constructor = Player;
 Player.prototype.getEdges = function() {
 	var edges = [];
 	edges.push( {p1: this.left_guide.getWorldPosition(), p2: this.right_guide.getWorldPosition()} );
-	edges.push( {p1: this.top_guide.getWorldPosition(), p2: this.left_guide.getWorldPosition()} );
-	edges.push( {p1: this.top_guide.getWorldPosition(), p2: this.right_guide.getWorldPosition()} );
+	edges.push( {p1: this.bottom_guide.getWorldPosition(), p2: this.left_guide.getWorldPosition()} );
+	edges.push( {p1: this.bottom_guide.getWorldPosition(), p2: this.right_guide.getWorldPosition()} );
 	return edges;
 }
 
@@ -126,14 +116,14 @@ function deploy_player(player) {
 	player.position.addScalar(outer_radius);
 	player.updateMatrixWorld();
 	var coords = {
-		left : player.left_guide.getWorldPosition(),
-		right : player.right_guide.getWorldPosition()
+		left: player.left_guide.getWorldPosition(),
+		right: player.right_guide.getWorldPosition()
 	};
 	player.cell = get_cell(player.position);
 	player.cell.planes.add(player.player_id);
 	for (var i = 0; i < trail_length-1; i++) {
 		player.trail.push(coords);
-		let collision_datum = {normal: new THREE.Vector3(0, 0, 0), cell: player.cell, id: player.player_id}; // Just taking up space.
+		let collision_datum = {normal: new THREE.Vector3(), cell: player.cell, id: player.player_id}; // Just taking up space.
 		player.collision_data.push(collision_datum);
 		player.cell.trails.add(collision_datum);
 	}
@@ -166,10 +156,12 @@ function update_location(player) {
 	player.cell = get_cell(player.position);
 	player.cell.planes.add(player.player_id);
 	player.gas += 1.5 * NORMAL_SPEED - speed; 
-	if (player.position.distanceToSquared(center) <= inner_radius * inner_radius) {
-		destroy_player(player.player_id, "crash", true);
-	}
 	update_trail(player);
+	if (player.position.distanceToSquared(center) <= radius_buffer_squared) {
+		if ( crashed(player.left_guide) || crashed(player.right_guide) || crashed(player.bottom_guide) ) {
+			destroy_player(player.player_id, "crash", true);
+		}
+	}
 }
 
 function send_location(player) {
@@ -233,30 +225,20 @@ io.on("connection", function(socket) {
 /* GRAPHICS */
 
 function draw_plane() {
-	var vertices = [
-		new THREE.Vector3(0, 15, 0),
-		new THREE.Vector3(-10, 0, 0),
-		new THREE.Vector3(0, 5, 0),
-		new THREE.Vector3(10, 0, 0)
-	];
 	this.left_guide = new THREE.Object3D();
 	this.right_guide = new THREE.Object3D();
 	this.top_guide = new THREE.Object3D();
 	this.bottom_guide = new THREE.Object3D();
 	this.add(this.left_guide);
 	this.add(this.right_guide);
-	this.add(this.top_guide);
 	this.add(this.bottom_guide);
-	this.left_guide.position.set(-10, 0, 0);
-	this.right_guide.position.set(10, 0, 0);
-	this.top_guide.position.set(0, 15, 0);
-	this.bottom_guide.position.set(0, 5, 0);
+	this.left_guide.position.set(-7, 2, 0);
+	this.right_guide.position.set(7, 2, 0);
+	this.top_guide.position.set(0, 5.5, 1);
+	this.bottom_guide.position.set(0, -6, 0.5);
 }
 
 function update_trail(player) {
-	if (!player.collision_data[0].cell.trails.has(player.collision_data[0])) {
-		console.log("Error!", player.collision_data[0].cell.trails);
-	}
 	player.collision_data[0].cell.trails.delete(player.collision_data[0]);
 	player.collision_data.shift();
 	var new_left = player.left_guide.getWorldPosition();
@@ -305,19 +287,16 @@ The idea is that "matrix" represents a linear transformation which maps its asso
 square ([0, 1] x [0, 1] x {0}).  We need only check whether a point lying within the plane containing the trail
 rectangle is mapped to the unit square. */
 
-function intersects(collision_data, edge /*p1, p2*/) {
+function intersects(collision_data, edge) {
 	var p1 = edge.p1;
 	var p2 = edge.p2;
 	// Find intersection between line passing through "p1" and "p2" and plane given by "collision_data".
-	var v = p2.clone();
-	v.sub(p1);
+	var v = minus(p2, p1);
 	var dp = collision_data.normal.dot(v);
 	if (dp == 0) { // Line and plane are parallel.
 		return false;
 	}
-	var tmp_vec = collision_data.point.clone();
-	tmp_vec.sub(p1);
-	var c = tmp_vec.dot(collision_data.normal) / dp;
+	var c = minus(collision_data.point, p1).dot(collision_data.normal) / dp;
 	if (c < 0 || c > 1) {
 		return false;
 	}
@@ -369,7 +348,7 @@ function initialize_cells() {
 		for (let j = 0; j < n; j++) {
 			cells[i][j] = new Array(n);
 			for (let k = 0; k < n; k++) {
-				cells[i][j][k] = { planes: new Set(), trails: new Set() };
+				cells[i][j][k] = { planes: new Set(), trails: new Set(), coords: [i, j, k] };
 			}
 		}
 	}
@@ -449,4 +428,12 @@ function reset_all() {
 	players = new Map();
 	initialize_cells();
 	seconds_left = initial_seconds;
+}
+
+function minus(v1, v2) {
+	return new THREE.Vector3(v1.x - v2.x, v1.y - v2.y, v1.z - v2.z);
+}
+
+function crashed(object) {
+	return object.getWorldPosition().distanceToSquared(center) < radius_squared;
 }
