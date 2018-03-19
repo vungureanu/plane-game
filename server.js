@@ -22,7 +22,7 @@ var cur_id = 0;
 var cells;
 var n = 2 * Math.ceil(outer_radius/cell_dim); // Number of cubes per side
 const epsilon = 1;
-const initial_seconds = 30;
+const initial_seconds = 1000;
 var seconds_left = initial_seconds;
 var update_id;
 var game_in_progress = false;
@@ -151,7 +151,6 @@ function update_location(player) {
 	player.rotateZ(-player.x_frac * speed * TURN_SPEED);
 	player.rotateX(-player.y_frac * speed * TURN_SPEED);
 	if (player.roll != "None") {
-		console.log(player.roll);
 		player.rotateY( player.roll == "CW" ? TURN_SPEED : -TURN_SPEED);
 	}
 	player.translateY(speed);
@@ -160,7 +159,8 @@ function update_location(player) {
 	player.cell.planes.delete(player.player_id);
 	player.cell = get_cell(player.position);
 	player.cell.planes.add(player.player_id);
-	player.gas += 1.5 * NORMAL_SPEED - speed; 
+	player.gas += 1.5 * NORMAL_SPEED - speed;
+	player.gas = Math.min(initial_gas, player.gas); 
 	update_trail(player);
 	if (player.position.distanceToSquared(center) <= radius_buffer_squared) {
 		if ( crashed(player.left_guide) || crashed(player.right_guide) || crashed(player.bottom_guide) ) {
@@ -221,7 +221,6 @@ io.on("connection", function(socket) {
 			player.y_frac = status.y_frac;
 			player.click = status.click;
 			player.roll = status.roll;
-			console.log(status);
 		}
 		else if (status.id != -1) {
 			console.log("Data received from unknown player:", status.id);

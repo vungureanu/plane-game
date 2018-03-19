@@ -1,6 +1,6 @@
 var scene;
 const game_screen = document.getElementById("game_screen");
-const renderer = new THREE.WebGLRenderer( {canvas: game_screen} );
+const renderer = new THREE.WebGLRenderer( {canvas: game_screen, precision: "lowp"} );
 const frac = 19 / 20; // Proportion of screen width taken up by main game
 var seconds_left;
 var game_height = window.innerHeight * frac;
@@ -17,13 +17,16 @@ const fast_rotate = 0.6;
 
 const texture = new THREE.TextureLoader().load("resources/plane_data/BodyTexture.bmp");
 const standard_material = new THREE.MeshBasicMaterial( {map: texture} );
+var plane_geometry = new THREE.BufferGeometry();
+var prop_geometry = new THREE.BufferGeometry();
 const objLoader = new THREE.OBJLoader();
 objLoader.setPath('resources/plane_data/');
 objLoader.load('low_res_no_prop.obj', function(object) {
-	plane_template = object;
+	geometry_array = object.children.map( (child) => child.geometry );
+	plane_geometry = THREE.BufferGeometryUtils.mergeBufferGeometries(geometry_array);
 });
 objLoader.load('prop.obj', function(object) {
-	prop_template = object.children[0];
+	prop_geometry = object.children[0].geometry;
 });
 
 const trail_material = new THREE.MeshStandardMaterial({
@@ -67,7 +70,7 @@ var send_data_id;
 var render_id;
 var own_player = { destroyed: false };
 var sides = {};
-var camera;
+var camera = new THREE.PerspectiveCamera(field_of_view, window.innerWidth/game_height, 0.1, 1000);
 var screen_status = "start";
 var buffer = 20;
 const vis_dist = 30;
@@ -142,16 +145,24 @@ function display_results() {
 	total_results = -1;
 }
 
-function draw_polygon(vertex_array) {
-	var geometry = new THREE.Geometry();
-	for (var i = 0; i < vertex_array.length; i++) {
-		geometry.vertices[i] = vertex_array[i];
+function draw_polygon(vertex_array, buffer_attribute) {
+	var geometry = new THREE.BufferGeometry();
+	var vertices = new Float32Array(18);
+	face = [0, 1, 2];
+	for ( var i in face ) { // Draw first triangle
+		vertices[3 * i] = vertex_array[ face[i] ].x;
+		vertices[3 * i + 1] = vertex_array[ face[i] ].y;
+		vertices[3 * i + 2] = vertex_array[ face[i] ].z;
 	}
-	for (var i = 0; i < vertex_array.length - 1; i++) {
-		geometry.faces.push( new THREE.Face3(0, i, i+1) );
+	face = [2, 3, 0];
+	for ( var i in face ) { // Draw second triangle
+		vertices[3 * i + 9] = vertex_array[ face[i] ].x;
+		vertices[3 * i + 10] = vertex_array[ face[i] ].y;
+		vertices[3 * i + 11] = vertex_array[ face[i] ].z;
 	}
-	geometry.computeFaceNormals();
+	geometry.addAttribute( "position", new THREE.BufferAttribute(vertices, 3) );
 	geometry.computeVertexNormals();
+	geometry.normalizeNormals();
 	return geometry;
 }
 
@@ -160,7 +171,8 @@ function add_trail(player, new_coords) {
 		player.old_coords = new_coords;
 	}
 	var geometry = draw_polygon( [player.old_coords.left, player.old_coords.right, new_coords.right, new_coords.left] );
-	var square = player.player_id == own_id ? new THREE.Mesh(geometry, own_material) : new THREE.Mesh(geometry, trail_material);
+	var square = (player.player_id == own_id) ? new THREE.Mesh(geometry, own_material) : new THREE.Mesh(geometry, trail_material);
+	square.matrixAutoUpdate = false;
 	player.trail.push(square);
 	scene.add(square);
 	player.old_coords = new_coords;
@@ -184,15 +196,12 @@ function send_data() {
 }
 
 socket.on("update", function(status) {
-	console.log(status.id, own_id, own_player.destroyed, status.pos);
 	if ( (screen_status == "waiting" || screen_status == "game") && players.has(status.id) && !players.get(status.id).destroyed ) {
-		console.log("OK");
 		var player = players.get(status.id);
 		var rot = new THREE.Euler(status.rot._x, status.rot._y, status.rot._z, status.rot._order);
 		player.setRotationFromEuler(rot);
 		player.position.set(status.pos.x, status.pos.y, status.pos.z);
 		if (status.id == own_id) {
-			console.log("OK2.");
 			update_bounds();
 			update_gas(status.gas);
 		}
@@ -205,7 +214,9 @@ socket.on("update", function(status) {
 
 function render() {
 	render_id = requestAnimationFrame(render);
+	//var time = performance.now();
 	renderer.render(scene, camera);
+	//console.log(performance.now() - time);
 }
 
 socket.on("id", function(status) {
@@ -216,6 +227,9 @@ socket.on("id", function(status) {
 	roll = "None";
 	x_frac = 0;
 	y_frac = 0;
+	if ( players.has(status.id) ) {
+		players.delete(status.id);
+	}
 	own_player = create_player(status.id, status.pos, status.rot, true);
 	if (screen_status == "waiting") {
 		screen_status = "game";
@@ -270,7 +284,6 @@ socket.on("config", function(config) {
 	draw_bounds();
 	update_gas();
 	draw_time();
-	draw_lights();
 });
 
 socket.on("time", function(sl) {
@@ -365,14 +378,12 @@ window.addEventListener("mouseup", function() {
 /* GRAPHICS */
 
 function create_player(player_id, pos, rot, add_camera) {
-	var player = plane_template.clone();
-	player.prop = prop_template.clone();
+	var material = standard_material.clone();
+	var player = new THREE.Mesh(plane_geometry, material);
+	player.material_used = material;
+	player.prop = new THREE.Mesh(prop_geometry, material);
 	player.prop.position.set(0, 5.7, 0.8);
 	player.add(player.prop);
-	player.material_used = standard_material.clone();
-	for (var child of player.children) {
-		child.material = player.material_used;
-	}
 	player.left_guide = new THREE.Object3D();
 	player.right_guide = new THREE.Object3D();
 	player.left_guide.position.set(-7, 2, 0);
@@ -383,12 +394,8 @@ function create_player(player_id, pos, rot, add_camera) {
 		player.add(camera);
 		camera.position.set(0, -25, 25);
 		camera.lookAt(0, 7, 0);
-		player.light = new THREE.SpotLight(0xffffff, 2, 200);
-		player.light.target = new THREE.Object3D();
-		player.add(player.light.target);
-		player.light.target.position.set(0, 10, 0);
+		player.light = new THREE.PointLight(0xffffff, 2, 200);
 		player.add(player.light);
-		player.light.position.set(0, 6, 0);
 	}
 	player.position.set(pos.x, pos.y, pos.z);
 	player.setRotationFromEuler( new THREE.Euler(rot._x, rot._y, rot._z, rot._order) );
@@ -409,21 +416,27 @@ function get_coords(player) {
 
 function draw_background() {
 	var material = new THREE.MeshBasicMaterial( {color: 0xffffff} );
+	var merged_geometry = new THREE.Geometry();
+	var geometries = [];
+	for (var i = 0; i < 3; i++) {
+		geometries.push( new THREE.SphereGeometry(1 + i / 3, 3, 2) );
+	}
 	for (var i = 0; i < num_stars; i++) {
-		let radius = Math.random() * 1 + 0.5;
-		let geometry = new THREE.SphereGeometry(radius, 32, 32);
 		let r = Math.random() * outer_radius + outer_radius + star_offset;
 		let theta = Math.random() * 2 * Math.PI;
 		let phi = Math.random() * Math.PI;
-		let star = new THREE.Mesh( geometry, material );
+		let star = new THREE.Object3D();
 		star.position.set(
 			r * Math.sin(theta) * Math.cos(phi),
 			r * Math.sin(theta) * Math.sin(phi),
 			r * Math.cos(theta)
 		);
 		star.position.addScalar(outer_radius);
-		scene.add(star);
+		star.updateMatrix();
+		merged_geometry.merge(geometries[i % 3], star.matrix);
 	}
+	var stars = new THREE.Mesh(merged_geometry, material);
+	scene.add(stars);
 }
 
 function update_gas(gas) {
@@ -443,15 +456,9 @@ function update_gas(gas) {
 function draw_moon() {
 	var material = new THREE.MeshLambertMaterial( {map: moon_texture} );
 	var geometry = new THREE.SphereGeometry(inner_radius, 32, 32);
-	var sun = new THREE.Mesh(geometry, material);
-	sun.renderOrder = 0;
-	sun.position.set(outer_radius, outer_radius, outer_radius);
-	scene.add(sun);
-}
-
-function draw_lights() {
-	var light = new THREE.AmbientLight(0xffffff, 1);
-	//scene.add(light);
+	var moon = new THREE.Mesh(geometry, material);
+	moon.position.set(outer_radius, outer_radius, outer_radius);
+	scene.add(moon);
 }
 
 function draw_bounds() {
@@ -476,7 +483,7 @@ function draw_bounds() {
 	var geometry3 = draw_polygon( [p3, p2, p6, p7] );
 	sides.y1 = new THREE.MeshBasicMaterial(bounds_back);
 	scene.add( new THREE.Mesh(geometry3, sides.y1) );
-	var geometry4 = draw_polygon( [p0, p3, p7, p4] ); 
+	var geometry4 = draw_polygon( [p0, p3, p7, p4] );
 	sides.z0 = new THREE.MeshBasicMaterial(bounds_back);
 	scene.add( new THREE.Mesh(geometry4, sides.z0) );
 	var geometry5 = draw_polygon( [p1, p2, p6, p5] );
@@ -493,7 +500,7 @@ function update_bounds() {
 }
 
 function draw_time() {
-	timer.innerHTML = "Time remaining: " + Math.floor(seconds_left / 60) + ":" + (seconds_left < 10 ? "0" : "") + (seconds_left % 60);
+	timer.innerHTML = "Time remaining: " + Math.floor(seconds_left / 60) + ":" + (seconds_left % 60 < 10 ? "0" : "") + (seconds_left % 60);
 }
 
 /* MISC */
@@ -520,7 +527,6 @@ function explode(player) {
 
 function fade_away(player) {
 	if (player.material_used.opacity <= 0) {
-		players.delete(player.player_id);
 		clearInterval(player.fade_id);
 		scene.remove(player);
 		scene.remove(player.light);
