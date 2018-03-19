@@ -49,7 +49,8 @@ function Player(player_id, user_name, socket) {
 	this.socket = socket;
 	this.x_frac = 0;
 	this.y_frac = 0; // Horizontal mouse position
-	this.click = false, // Whether mouse is depressed
+	this.click = false; // Whether mouse is depressed
+	this.roll = "None";
 	this.player_id = player_id; // ID assigned to player
 	deploy_player(this);
 }
@@ -149,6 +150,10 @@ function update_location(player) {
 	var speed = (player.click && player.gas > 0) ? FAST_SPEED : NORMAL_SPEED;
 	player.rotateZ(-player.x_frac * speed * TURN_SPEED);
 	player.rotateX(-player.y_frac * speed * TURN_SPEED);
+	if (player.roll != "None") {
+		console.log(player.roll);
+		player.rotateY( player.roll == "CW" ? TURN_SPEED : -TURN_SPEED);
+	}
 	player.translateY(speed);
 	player.updateMatrixWorld();
 	alter_bounds(player);
@@ -211,9 +216,12 @@ io.on("connection", function(socket) {
 	});
 	socket.on("status", function(status) {
 		if ( players.has(status.id) ) {
-			players.get(status.id).x_frac = status.x_frac;
-			players.get(status.id).y_frac = status.y_frac;
-			players.get(status.id).click = status.click;
+			let player = players.get(status.id);
+			player.x_frac = status.x_frac;
+			player.y_frac = status.y_frac;
+			player.click = status.click;
+			player.roll = status.roll;
+			console.log(status);
 		}
 		else if (status.id != -1) {
 			console.log("Data received from unknown player:", status.id);

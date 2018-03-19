@@ -7,24 +7,32 @@ scene.add(camera);
 var model;
 camera.position.set(0, 125, -125);
 var mtlLoader = new THREE.MTLLoader();
-mtlLoader.setPath('textures/p6/');
-mtlLoader.load('plane.mtl', function(materials) {
+mtlLoader.setPath('resources/plane_data/');
+mtlLoader.load('low_res.mtl', function(materials) {
 	materials.preload();
 	var objLoader = new THREE.OBJLoader();
 	objLoader.setMaterials(materials);
-	objLoader.setPath('textures/p6/');
-	objLoader.load('plane5.obj', function(object) {
+	objLoader.setPath('resources/plane_data/');
+	objLoader.load('low_res.obj', function(object) {
+		console.log(object);
 		scene.add(object);
-		camera.lookAt(object);
-		renderer.render(scene, camera);
-	});
-	objLoader.load('prop.obj', function(object) {
-		scene.add(object);
-		object.position.set(0, 5.7, 0.8);
 		camera.lookAt(object);
 		renderer.render(scene, camera);
 	});
 });
+/*var objLoader = new THREE.OBJLoader();
+objLoader.setPath('resources/plane_data/');
+objLoader.load('untitled.obj', function(object) {
+		console.log(object);
+		scene.add(object);
+		camera.lookAt(object);
+		renderer.render(scene, camera);
+	});*/
+var t = new THREE.TextureLoader().load("resources/plane_data/BodyTexture.bmp");
+var geo = new THREE.BoxGeometry(20, 20, 20);
+var mat = new THREE.MeshBasicMaterial({map:t});
+var c = new THREE.Mesh(geo, mat);
+//scene.add(c);
 const own_material = new THREE.MeshBasicMaterial({
 		color: 0x00ff00,
 		side : THREE.DoubleSide,

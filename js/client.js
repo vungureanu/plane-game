@@ -12,24 +12,20 @@ var socket = io();
 const num_stars = 100;
 const moon_texture = new THREE.TextureLoader().load("resources/moon.jpg");
 var plane_template;
-var standard_material;
 const slow_rotate = 0.3;
 const fast_rotate = 0.6;
-const mtlLoader = new THREE.MTLLoader();
-mtlLoader.setPath('resources/plane_data/');
-mtlLoader.load('plane.mtl', function(materials) {
-	materials.preload();
-	var objLoader = new THREE.OBJLoader();
-	objLoader.setMaterials(materials);
-	objLoader.setPath('resources/plane_data/');
-	objLoader.load('plane.obj', function(object) {
-		plane_template = object;
-		standard_material = plane_template.children[0].material;
-	});
-	objLoader.load('prop.obj', function(object) {
-		prop_template = object;
-	});
+
+const texture = new THREE.TextureLoader().load("resources/plane_data/BodyTexture.bmp");
+const standard_material = new THREE.MeshBasicMaterial( {map: texture} );
+const objLoader = new THREE.OBJLoader();
+objLoader.setPath('resources/plane_data/');
+objLoader.load('low_res_no_prop.obj', function(object) {
+	plane_template = object;
 });
+objLoader.load('prop.obj', function(object) {
+	prop_template = object.children[0];
+});
+
 const trail_material = new THREE.MeshStandardMaterial({
 		color: 0x0000ff,
 		side : THREE.DoubleSide,
@@ -43,33 +39,34 @@ const own_material = new THREE.MeshBasicMaterial({
 		opacity: 0.5
 });
 const bounds_front = {
-	color: 0xaa2727,
+	color: 0x3065c1,
 	transparent: true,
 	opacity: 0,
 	side: THREE.FrontSide
 };
 const bounds_back = {
-	color: 0xaa2727,
+	color: 0x3065c1,
 	transparent: true,
 	opacity: 0,
 	side: THREE.BackSide
 };
 var trail_length;
-const send_interval = 100; // Milliseconds between successive send operations
+const send_interval = 100;
 const star_offset = 300;
 const field_of_view = 75;
 var outer_radius;
 var inner_radius;
 var initial_gas;
-// Distance of mouse away from center, as fraction of the canvas's width or height
-var x_frac = 0;
-var y_frac = 0;
-var players = new Map(); // State (spatial coordinates and orientation) of all other players
-var click = false; // Whether mouse is depressed.
+var x_frac;
+var y_frac;
+var roll;
+var players = new Map();
+var click = false;
 var own_id = -1;
-var send_data_id; // Identifies process sending data to server.
-var own_player;
-var sides = {}; // Outer boundaries of space
+var send_data_id;
+var render_id;
+var own_player = { destroyed: false };
+var sides = {};
 var camera;
 var screen_status = "start";
 var buffer = 20;
@@ -81,7 +78,7 @@ const enter_name = "\n#CONTRAILS\n\n\nEnter nickname: ";
 const start_message = "\n\n\nUse the mouse to maneuver; click to accelerate.\nTry to ensnare other players in your trail, but avoid running into other players' trails.\nIf you venture beyond the bounds of the arena, you will reappear on the opposite side.\n\n\nPress ENTER to start.\n";
 var user_name = "";
 const fade_rate = 20;
-const fade_increment = 0.1;
+const fade_increment = 0.05;
 const accepted_characters = /[0-9 + a-z + A-Z + _]/;
 
 /* GRAPHICS */
@@ -181,17 +178,21 @@ function send_data() {
 		id: own_id,
 		x_frac: x_frac,
 		y_frac: y_frac,
-		click: click
+		click: click,
+		roll: roll
 	});
 }
 
 socket.on("update", function(status) {
+	console.log(status.id, own_id, own_player.destroyed, status.pos);
 	if ( (screen_status == "waiting" || screen_status == "game") && players.has(status.id) && !players.get(status.id).destroyed ) {
+		console.log("OK");
 		var player = players.get(status.id);
 		var rot = new THREE.Euler(status.rot._x, status.rot._y, status.rot._z, status.rot._order);
 		player.setRotationFromEuler(rot);
 		player.position.set(status.pos.x, status.pos.y, status.pos.z);
 		if (status.id == own_id) {
+			console.log("OK2.");
 			update_bounds();
 			update_gas(status.gas);
 		}
@@ -199,20 +200,27 @@ socket.on("update", function(status) {
 		var new_coords = get_coords(player);
 		add_trail(player, new_coords);
 		shorten_trail(player);
-		renderer.render(scene, camera);
 	}
 });
+
+function render() {
+	render_id = requestAnimationFrame(render);
+	renderer.render(scene, camera);
+}
 
 socket.on("id", function(status) {
 	if (own_id != -1) {
 		own_player.remove(camera);
 	}
 	own_id = status.id;
+	roll = "None";
+	x_frac = 0;
+	y_frac = 0;
 	own_player = create_player(status.id, status.pos, status.rot, true);
-	renderer.render(scene, camera);
 	if (screen_status == "waiting") {
 		screen_status = "game";
 		set_visibility("game");
+		render_id = requestAnimationFrame(render);
 	}
 	for (var i = 0; i < trail_length; i++) {
 		own_player.trail.push(own_player.old_coords);
@@ -239,11 +247,11 @@ socket.on("destroy", function(status) {
 		clearInterval(send_data_id);
 		own_id = -1;
 	}
-	renderer.render(scene, camera);
 });
 
 socket.on("game_over", function() {
 	clearInterval(send_data_id);
+	cancelAnimationFrame(render_id);
 	screen_status = "end";
 	set_visibility("text");
 });
@@ -312,23 +320,41 @@ window.addEventListener("mousedown", function() {
 });
 
 window.addEventListener("keydown", function(e) {
-	if (e.key == "Enter") {
-		if (screen_status == "end") {
-			screen_status = "start";
+	if (screen_status != "game" ) {
+		if (e.key == "Enter") {
+			if (screen_status == "end") {
+				screen_status = "start";
+				format_text(enter_name + user_name + start_message);
+			}
+			else if (screen_status == "start") {
+				screen_status = "waiting";
+				socket.emit("start", user_name);
+			}
+		}
+		else if ( e.key.length == 1 && e.key.match(accepted_characters) ) {
+			user_name += e.key;
 			format_text(enter_name + user_name + start_message);
 		}
-		else if (screen_status == "start") {
-			screen_status = "waiting";
-			socket.emit("start", user_name);
+		else if (e.key == "Backspace") {
+			user_name = user_name.slice(0, -1);
+			format_text(enter_name + user_name + start_message);
 		}
 	}
-	else if ( e.key.length == 1 && e.key.match(accepted_characters) ) {
-		user_name += e.key;
-		format_text(enter_name + user_name + start_message);
+	else {
+		if (e.key == "a" || e.key == "A") {
+			roll = "CCW";
+		}
+		else if (e.key == "d" || e.key == "D") {
+			roll = "CW";
+		}
 	}
-	else if (e.key == "Backspace") {
-		user_name = user_name.slice(0, -1);
-		format_text(enter_name + user_name + start_message);
+});
+window.addEventListener("keyup", function(e) {
+	if (e.key == "a" || e.key == "A") {
+		roll = (roll == "CCW" ? "None" : "CW");
+	}
+	else if (e.key == "d" || e.key == "D") {
+		roll = (roll == "CW" ? "None" : "CCW");
 	}
 });
 
@@ -353,19 +379,16 @@ function create_player(player_id, pos, rot, add_camera) {
 	player.right_guide.position.set(7, 2, 0);
 	player.add(player.left_guide);
 	player.add(player.right_guide);
-	player.upper_light = new THREE.PointLight(0xffffff, 3, 35);
-	player.upper_light.position.set(0, -20, 0);
-	player.add(player.upper_light);
 	if (add_camera == true) {
 		player.add(camera);
-		camera.position.set(0, -25, 0);
-		camera.lookAt(0, 1, 0);
-		player.light = new THREE.SpotLight(0xffffff, 3, 200);
+		camera.position.set(0, -25, 25);
+		camera.lookAt(0, 7, 0);
+		player.light = new THREE.SpotLight(0xffffff, 2, 200);
 		player.light.target = new THREE.Object3D();
 		player.add(player.light.target);
-		player.light.target.position.set(0, 1, 0);
+		player.light.target.position.set(0, 10, 0);
 		player.add(player.light);
-		player.light.position.set(0, 0, 0);
+		player.light.position.set(0, 6, 0);
 	}
 	player.position.set(pos.x, pos.y, pos.z);
 	player.setRotationFromEuler( new THREE.Euler(rot._x, rot._y, rot._z, rot._order) );
@@ -418,7 +441,7 @@ function update_gas(gas) {
 }
 
 function draw_moon() {
-	var material = new THREE.MeshPhongMaterial( {map: moon_texture} );
+	var material = new THREE.MeshLambertMaterial( {map: moon_texture} );
 	var geometry = new THREE.SphereGeometry(inner_radius, 32, 32);
 	var sun = new THREE.Mesh(geometry, material);
 	sun.renderOrder = 0;
@@ -507,7 +530,6 @@ function fade_away(player) {
 	else {
 		player.material_used.opacity -= fade_increment;
 	}
-	renderer.render(scene, camera);
 }
 
 function set_visibility(type) {

@@ -1,0 +1,8 @@
+# Blender MTL File: 'untitled.blend'
+# Material Count: 1
+
+newmtl BodyTexture_1
+Ni 1.000000
+d 1.000000
+illum 1
+map_Kd BodyTexture.bmp
