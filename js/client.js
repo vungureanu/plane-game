@@ -10,7 +10,7 @@ const gas_context = gas_bar.getContext("2d");
 const timer = document.getElementById("timer");
 var socket = io();
 const num_stars = 100;
-const moon_texture = new THREE.TextureLoader().load("resources/moon.jpg");
+const moon_texture = new THREE.TextureLoader().load("resources/moon_low_res.jpg");
 var plane_template;
 const slow_rotate = 0.3;
 const fast_rotate = 0.6;
@@ -30,7 +30,7 @@ objLoader.load('prop.obj', function(object) {
 });
 
 const trail_material = new THREE.MeshStandardMaterial({
-		color: 0x0000ff,
+		color: 0xff0000,
 		side : THREE.DoubleSide,
 		transparent : true,
 		opacity: 0.5
@@ -56,6 +56,7 @@ const bounds_back = {
 var trail_length;
 const send_interval = 100;
 const star_offset = 300;
+var num_trail_vertices;
 const field_of_view = 75;
 var outer_radius;
 var inner_radius;
@@ -145,42 +146,47 @@ function display_results() {
 	total_results = -1;
 }
 
-function draw_polygon(vertex_array, buffer_attribute) {
-	var geometry = new THREE.BufferGeometry();
-	var vertices = new Float32Array(18);
-	face = [0, 1, 2];
-	for ( var i in face ) { // Draw first triangle
-		vertices[3 * i] = vertex_array[ face[i] ].x;
-		vertices[3 * i + 1] = vertex_array[ face[i] ].y;
-		vertices[3 * i + 2] = vertex_array[ face[i] ].z;
+function draw_polygon(vertex_array, player = false) {
+	if (player) {
+		var trail_array = player.trail_geometry.attributes.position.array;
+		var normal_array = player.trail_geometry.attributes.normal.array;
+		var index = player.trail_index;
 	}
-	face = [2, 3, 0];
-	for ( var i in face ) { // Draw second triangle
-		vertices[3 * i + 9] = vertex_array[ face[i] ].x;
-		vertices[3 * i + 10] = vertex_array[ face[i] ].y;
-		vertices[3 * i + 11] = vertex_array[ face[i] ].z;
+	else {
+		var geometry = new THREE.BufferGeometry();
+		geometry.addAttribute( "position", new THREE.BufferAttribute(new Float32Array(18), 3) ); // The quadrilateral is composed of two triangular faces, so we need 6 vertices, each of which has 3 coordinates; whence the 18. 
+		geometry.addAttribute( "normal", new THREE.BufferAttribute(new Float32Array(18), 3) );
+		geometry.attributes.position.needsUpdate = true;
+		geometry.attributes.normal.needsUpdate = true;
+		var trail_array = geometry.attributes.position.array;
+		var normal_array = geometry.attributes.normal.array;
+		var index = 0;
 	}
-	geometry.addAttribute( "position", new THREE.BufferAttribute(vertices, 3) );
-	geometry.computeVertexNormals();
-	geometry.normalizeNormals();
+	var normal = new THREE.Vector3().crossVectors( minus(vertex_array[1], vertex_array[0]), minus(vertex_array[3], vertex_array[1]) );
+	normal.normalize();
+	var faces = [0, 1, 2, 2, 3, 0];
+	for (var i = 0; i < faces.length; i++) {
+		trail_array[index + 3 * i] = vertex_array[faces[i]].x;
+		trail_array[index + 3 * i + 1] = vertex_array[faces[i]].y;
+		trail_array[index + 3 * i + 2] = vertex_array[faces[i]].z;
+		normal_array[index + 3 * i] = normal.x;
+		normal_array[index + 3 * i + 1] = normal.y;
+		normal_array[index + 3 * i + 2] = normal.z;
+	}
 	return geometry;
+}
+
+function minus(v1, v2) {
+	return new THREE.Vector3(v1.x - v2.x, v1.y - v2.y, v1.z - v2.z);
 }
 
 function add_trail(player, new_coords) {
 	if (player.old_coords.left.distanceTo(new_coords.left) > outer_radius / 2) {
 		player.old_coords = new_coords;
 	}
-	var geometry = draw_polygon( [player.old_coords.left, player.old_coords.right, new_coords.right, new_coords.left] );
-	var square = (player.player_id == own_id) ? new THREE.Mesh(geometry, own_material) : new THREE.Mesh(geometry, trail_material);
-	square.matrixAutoUpdate = false;
-	player.trail.push(square);
-	scene.add(square);
+	draw_polygon( [player.old_coords.left, player.old_coords.right, new_coords.right, new_coords.left], player );
+	player.trail_index = (player.trail_index + 18) % num_trail_vertices;
 	player.old_coords = new_coords;
-}
-
-function shorten_trail(player) {
-	scene.remove(player.trail[0]);
-	player.trail.shift();
 }
 
 /* CLIENT-SERVER COMMUNICATION */
@@ -206,17 +212,19 @@ socket.on("update", function(status) {
 			update_gas(status.gas);
 		}
 		player.prop.rotateY(click ? fast_rotate : slow_rotate);
+		player.updateMatrixWorld();
 		var new_coords = get_coords(player);
 		add_trail(player, new_coords);
-		shorten_trail(player);
+		requestAnimationFrame(render);
 	}
 });
 
 function render() {
-	render_id = requestAnimationFrame(render);
-	//var time = performance.now();
+	for ( var player of players.values() ) {
+		player.trail_geometry.attributes.position.needsUpdate = true;
+		player.trail_geometry.attributes.normal.needsUpdate = true;
+	}
 	renderer.render(scene, camera);
-	//console.log(performance.now() - time);
 }
 
 socket.on("id", function(status) {
@@ -234,10 +242,7 @@ socket.on("id", function(status) {
 	if (screen_status == "waiting") {
 		screen_status = "game";
 		set_visibility("game");
-		render_id = requestAnimationFrame(render);
-	}
-	for (var i = 0; i < trail_length; i++) {
-		own_player.trail.push(own_player.old_coords);
+		requestAnimationFrame(render);
 	}
 	send_data_id = setInterval(send_data, send_interval);
 });
@@ -265,7 +270,6 @@ socket.on("destroy", function(status) {
 
 socket.on("game_over", function() {
 	clearInterval(send_data_id);
-	cancelAnimationFrame(render_id);
 	screen_status = "end";
 	set_visibility("text");
 });
@@ -276,9 +280,11 @@ socket.on("config", function(config) {
 	inner_radius = config.inner_radius;
 	outer_radius = config.outer_radius;
 	seconds_left = config.seconds_left;
+	num_trail_vertices = (trail_length - 1) * 18;
 	players = new Map();
 	camera = new THREE.PerspectiveCamera(field_of_view, window.innerWidth/game_height, 0.1, 1000);
 	scene = new THREE.Scene();
+	//scene.add(new THREE.AmbientLight(0xffffff));
 	draw_moon();
 	draw_background();
 	draw_bounds();
@@ -326,6 +332,7 @@ window.addEventListener("resize", function() {
 	if (screen_status == "end") {
 		display_results();
 	}
+	requestAnimationFrame(render);
 });
 
 window.addEventListener("mousedown", function() {
@@ -380,7 +387,6 @@ window.addEventListener("mouseup", function() {
 function create_player(player_id, pos, rot, add_camera) {
 	var material = standard_material.clone();
 	var player = new THREE.Mesh(plane_geometry, material);
-	player.material_used = material;
 	player.prop = new THREE.Mesh(prop_geometry, material);
 	player.prop.position.set(0, 5.7, 0.8);
 	player.add(player.prop);
@@ -396,6 +402,7 @@ function create_player(player_id, pos, rot, add_camera) {
 		camera.lookAt(0, 7, 0);
 		player.light = new THREE.PointLight(0xffffff, 2, 200);
 		player.add(player.light);
+		player.light.position.set(0, 0, 10);
 	}
 	player.position.set(pos.x, pos.y, pos.z);
 	player.setRotationFromEuler( new THREE.Euler(rot._x, rot._y, rot._z, rot._order) );
@@ -403,7 +410,17 @@ function create_player(player_id, pos, rot, add_camera) {
 	scene.add(player);
 	player.player_id = player_id;
 	player.old_coords = { left: player.left_guide.getWorldPosition(), right: player.right_guide.getWorldPosition() };
-	player.trail = [];
+	player.trail_index = 0;
+	player.trail_geometry = new THREE.BufferGeometry();
+	player.trail_mesh = new THREE.Mesh(player.trail_geometry, (own_id == player_id) ? own_material : trail_material);
+	player.trail_mesh.frustumCulled = false;
+	scene.add(player.trail_mesh);
+	var trail_vertices = new Float32Array(num_trail_vertices);
+	var position_buffer = new THREE.BufferAttribute(trail_vertices, 3);
+	player.trail_geometry.addAttribute("position", position_buffer);
+	var trail_normals = new Float32Array(num_trail_vertices);
+	var normal_buffer = new THREE.BufferAttribute(trail_normals, 3);
+	player.trail_geometry.addAttribute("normal", normal_buffer);
 	player.fade_id = -1;
 	player.destroyed = false;
 	players.set(player_id, player);
@@ -505,36 +522,24 @@ function draw_time() {
 
 /* MISC */
 
-function remove_player(player) {
-	for (var square of player.trail) {
-		scene.remove(square);
-	}
-	if (player.player_id == own_id) {
-		player.remove(camera);
-	}
-	scene.remove(player);
-	scene.remove(player.light);
-}
-
 function explode(player) {
 	player.destroyed = true;
-	for (var square of player.trail) {
-		scene.remove(square);
-	}
-	player.material_used.transparent = true;
+	scene.remove(player.trail_geometry);
+	player.material.transparent = true;
 	player.fade_id = setInterval(fade_away, fade_rate, player);
 }
 
 function fade_away(player) {
-	if (player.material_used.opacity <= 0) {
+	if (player.material.opacity <= 0) {
 		clearInterval(player.fade_id);
 		scene.remove(player);
-		scene.remove(player.light);
-		scene.remove(player.upper_light);
-		scene.remove(player.prop);
+		scene.remove(player.trail_mesh);
+		requestAnimationFrame(render);
+		console.log("OK.");
 	}
 	else {
-		player.material_used.opacity -= fade_increment;
+		player.material.opacity -= fade_increment;
+		requestAnimationFrame(render);
 	}
 }
 

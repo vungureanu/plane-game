@@ -59,9 +59,10 @@ Player.prototype = Object.create(THREE.Object3D.prototype);
 Player.prototype.constructor = Player;
 Player.prototype.getEdges = function() {
 	var edges = [];
-	edges.push( {p1: this.left_guide.getWorldPosition(), p2: this.right_guide.getWorldPosition()} );
-	edges.push( {p1: this.bottom_guide.getWorldPosition(), p2: this.left_guide.getWorldPosition()} );
-	edges.push( {p1: this.bottom_guide.getWorldPosition(), p2: this.right_guide.getWorldPosition()} );
+	edges.push( {p1: this.left_guide.coords, p2: this.right_guide.old_coords} )
+	edges.push( {p1: this.right_guide.coords, p2: this.left_guide.old_coords} );
+	edges.push( {p1: this.top_guide.coords, p2: this.bottom_guide.old_coords} );
+	edges.push( {p1: this.bottom_guide.coords, p2: this.top_guide.old_coords} );
 	return edges;
 }
 
@@ -122,11 +123,11 @@ function deploy_player(player) {
 	};
 	player.cell = get_cell(player.position);
 	player.cell.planes.add(player.player_id);
-	for (var i = 0; i < trail_length-1; i++) {
+	for (var i = 0; i < trail_length - 1; i++) {
 		player.trail.push(coords);
-		let collision_datum = {normal: new THREE.Vector3(), cell: player.cell, id: player.player_id}; // Just taking up space.
+		let collision_datum = {cell: player.cell}; // Just taking up space.
 		player.collision_data.push(collision_datum);
-		player.cell.trails.add(collision_datum);
+		player.collision_data.push(collision_datum);
 	}
 	player.trail.push(coords);
 }
@@ -156,6 +157,10 @@ function update_location(player) {
 	player.translateY(speed);
 	player.updateMatrixWorld();
 	alter_bounds(player);
+	for (guide of player.guides) {
+		guide.old_coords = guide.coords;
+		guide.coords = guide.getWorldPosition();
+	}
 	player.cell.planes.delete(player.player_id);
 	player.cell = get_cell(player.position);
 	player.cell.planes.add(player.player_id);
@@ -236,9 +241,12 @@ function draw_plane() {
 	this.right_guide = new THREE.Object3D();
 	this.top_guide = new THREE.Object3D();
 	this.bottom_guide = new THREE.Object3D();
-	this.add(this.left_guide);
-	this.add(this.right_guide);
-	this.add(this.bottom_guide);
+	this.guides = [this.left_guide, this.right_guide, this.top_guide, this.bottom_guide];
+	for (guide of this.guides) {
+		this.add(guide);
+		guide.old_coords = guide.getWorldPosition();
+		guide.coords = guide.old_coords;
+	}
 	this.left_guide.position.set(-7, 2, 0);
 	this.right_guide.position.set(7, 2, 0);
 	this.top_guide.position.set(0, 5.5, 1);
@@ -247,22 +255,33 @@ function draw_plane() {
 
 function update_trail(player) {
 	player.collision_data[0].cell.trails.delete(player.collision_data[0]);
+	player.collision_data[1].cell.trails.delete(player.collision_data[1]);
+	player.collision_data.shift();
 	player.collision_data.shift();
 	var new_left = player.left_guide.getWorldPosition();
 	var new_right = player.right_guide.getWorldPosition();
 	var old_left = player.oob_flag ? new_left.clone() : player.trail[trail_length-1].left;
 	var old_right = player.oob_flag ? new_right.clone() : player.trail[trail_length-1].right;
-	var v1 = new_left.clone();
-	v1.sub(old_left);
-	var v2 = old_right.clone();
-	v2.sub(old_left);
-	var v3 = new THREE.Vector3().crossVectors(v1, v2); // If v1 and v2 are not parallel, then {v1, v2, v3} is a basis of R^3.
-	v3.normalize(); // Not necessary
+	var collision_data = get_collision_data(old_left, new_left, old_right, player.player_id);
+	collision_data.cell.trails.add(collision_data);
+	player.collision_data.push(collision_data);
+	var collision_data = get_collision_data(new_right, new_left, old_right, player.player_id);
+	collision_data.cell.trails.add(collision_data);
+	player.collision_data.push(collision_data);
+	player.trail.push( {left: new_left, right: new_right} );
+	player.trail.shift();
+}
+
+function get_collision_data(p1, p2, p3, player_id) { // p1 is between p2 and p3
+	var v1 = minus(p2, p1);
+	var v2 = minus(p3, p1);
+	var v3 = new THREE.Vector3().crossVectors(v1, v2);
+	v3.normalize();
 	var matrix = new THREE.Matrix3();
 	matrix.set( 
-		new_left.x - old_left.x, old_right.x - old_left.x, v3.x,
-		new_left.y - old_left.y, old_right.y - old_left.y, v3.y,
-		new_left.z - old_left.z, old_right.z - old_left.z, v3.z
+		v1.x, v2.x, v3.x,
+		v1.y, v2.y, v3.y,
+		v1.z, v2.z, v3.z
 	);
 	try {
 		matrix = matrix.getInverse(matrix, true);
@@ -270,21 +289,18 @@ function update_trail(player) {
 	catch(e) {
 		console.log("Matrix not invertible:", matrix);
 	}
-	var center = old_left.clone();
+	var center = p1.clone();
 	center.addScaledVector(v1, 0.5);
 	center.addScaledVector(v2, 0.5);
 	var cell = get_cell(center);
 	var collision_data = {
 		matrix: matrix,
 		normal: v3,
-		point: old_left,
-		id: player.player_id,
+		point: p1,
+		id: player_id,
 		cell: cell
 	};
-	cell.trails.add(collision_data);
-	player.collision_data.push(collision_data);
-	player.trail.push( {left: new_left, right: new_right} );
-	player.trail.shift();
+	return collision_data;
 }
 
 /* INTERSECTION DETECTION */
@@ -313,7 +329,7 @@ function intersects(collision_data, edge) {
 	point_of_intersection.add(p1);
 	point_of_intersection.sub(collision_data.point);
 	point_of_intersection.applyMatrix3(collision_data.matrix);
-	if ( point_of_intersection.x >= 0 && point_of_intersection.x <= 1 && point_of_intersection.y >= 0 && point_of_intersection.y <= 1) {
+	if ( point_of_intersection.x >= 0 && point_of_intersection.x <= 1 && point_of_intersection.y >= 0 && point_of_intersection.y <= 1 && point_of_intersection.x + point_of_intersection.y <= 1) {
 		return true;
 	}
 	return false;
