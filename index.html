@@ -19,22 +19,36 @@
 				left : 0px;
 				z-index: 1;
 			}
-			#timer {
+			.game_info {
 				position: absolute;
 				z-index: 2;
 				color: white;
 				background-color: rgba(0, 0, 0, 0);
-				top: 20px;
-				left: 20px;
 				cursor: default;
 				user-select: none;
+				font-size: 20px;
+				left: 15px;
+			}
+			#timer {
+				white-space: nowrap;
+				top: 15px;
+			}
+			#rank {
+				white-space: nowrap;
+				top: 45px;
+			}
+			#leaders {
+				white-space: pre;
+				top: 105px;
 			}
 		</style>
 	</head>
 	<body>
 		<canvas id="main_screen"></canvas>
 		<canvas id="game_screen"></canvas>
-		<div id="timer"></div>
+		<div id="timer" class="game_info"></div>
+		<div id="rank" class="game_info"></div>
+		<div id="leaders" class="game_info"></div>
 		<canvas id="gasBar"></canvas>
 		<script src="/socket.io/socket.io.js"></script>
 		<script src="/js/three.js"></script>

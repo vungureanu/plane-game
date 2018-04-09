@@ -1,4 +1,4 @@
-var scene;
+var scene = new THREE.Scene();
 const game_screen = document.getElementById("game_screen");
 const renderer = new THREE.WebGLRenderer( {canvas: game_screen, precision: "lowp"} );
 const frac = 19 / 20; // Proportion of screen width taken up by main game
@@ -8,20 +8,23 @@ renderer.setSize(window.innerWidth, game_height);
 const gas_bar = document.getElementById("gasBar");
 const gas_context = gas_bar.getContext("2d");
 const timer = document.getElementById("timer");
+const rank = document.getElementById("rank");
+const leaders =  document.getElementById("leaders");
 var socket = io();
 const num_stars = 100;
-const moon_texture = new THREE.TextureLoader().load("resources/moon_low_res.jpg");
+const moon_texture = new THREE.TextureLoader().load("resources/moon.jpg");
 var plane_template;
 const slow_rotate = 0.3;
 const fast_rotate = 0.6;
+const camera_position = new THREE.Vector3(0, -1, 2);
 
 const texture = new THREE.TextureLoader().load("resources/plane_data/BodyTexture.bmp");
-const standard_material = new THREE.MeshBasicMaterial( {map: texture} );
+const plane_material = new THREE.MeshBasicMaterial( {map: texture} );
 var plane_geometry = new THREE.BufferGeometry();
 var prop_geometry = new THREE.BufferGeometry();
 const objLoader = new THREE.OBJLoader();
 objLoader.setPath('resources/plane_data/');
-objLoader.load('low_res_no_prop.obj', function(object) {
+objLoader.load('plane.obj', function(object) {
 	geometry_array = object.children.map( (child) => child.geometry );
 	plane_geometry = THREE.BufferGeometryUtils.mergeBufferGeometries(geometry_array);
 });
@@ -32,14 +35,14 @@ objLoader.load('prop.obj', function(object) {
 const trail_material = new THREE.MeshStandardMaterial({
 		color: 0xff0000,
 		side : THREE.DoubleSide,
-		transparent : true,
-		opacity: 0.5
+		//transparent : true,
+		//opacity: 0.5
 });
 const own_material = new THREE.MeshBasicMaterial({
 		color: 0x00ff00,
 		side : THREE.DoubleSide,
-		transparent : true,
-		opacity: 0.5
+		//transparent : true,
+		//opacity: 0.5
 });
 const bounds_front = {
 	color: 0x3065c1,
@@ -181,6 +184,7 @@ function minus(v1, v2) {
 }
 
 function add_trail(player, new_coords) {
+	player.seq++;
 	if (player.old_coords.left.distanceTo(new_coords.left) > outer_radius / 2) {
 		player.old_coords = new_coords;
 	}
@@ -213,11 +217,43 @@ socket.on("update", function(status) {
 		}
 		player.prop.rotateY(click ? fast_rotate : slow_rotate);
 		player.updateMatrixWorld();
-		var new_coords = get_coords(player);
-		add_trail(player, new_coords);
+		if (player.seq < status.seq) {
+			add_trail( player, get_coords(player) );
+			player.seq = status.seq;
+		}
 		requestAnimationFrame(render);
 	}
 });
+
+socket.on("scores", function(array) {
+	for (var el of array) {
+		if (players.has(el.player_id)) {
+			players.get(el.player_id).score = el.score;
+		}
+		else {
+			players.set(el.player_id, {score: el.score, disconnected: false});
+		}
+	}
+	calculate_rank();
+});
+
+socket.on("score", function(player_id) {
+	if (players.has(player_id)) {
+			players.get(player_id).score++;
+	}
+	else { // Client has not yet received information about player
+		players.set( player_id, {score: 1, disconnected: false} );
+	}
+	calculate_rank();
+});
+
+function calculate_rank() {
+	var current_rank = 1;
+	for ( player of players.values() ) {
+		current_rank += (player.score > own_player.score) ? 1 : 0;
+	}
+	rank.innerHTML = "Rank: " + current_rank + '/' + players.size;
+}
 
 function render() {
 	for ( var player of players.values() ) {
@@ -235,32 +271,49 @@ socket.on("id", function(status) {
 	roll = "None";
 	x_frac = 0;
 	y_frac = 0;
-	if ( players.has(status.id) ) {
-		players.delete(status.id);
-	}
-	own_player = create_player(status.id, status.pos, status.rot, true);
+	own_player = create_player(status.id, status.pos, status.rot, true, status.user_name);
 	if (screen_status == "waiting") {
 		screen_status = "game";
 		set_visibility("game");
-		requestAnimationFrame(render);
 	}
+	calculate_rank();
+	requestAnimationFrame(render);
 	send_data_id = setInterval(send_data, send_interval);
 });
 
 socket.on("add", function(status) {
-	var player = create_player(status.id, status.pos, status.rot, false);
-	for ( var i = 0; i < trail_length; i++ ) {
-		var new_coords = {
-			left : new THREE.Vector3( status.trail[i].left.x, status.trail[i].left.y, status.trail[i].left.z ),
-			right : new THREE.Vector3( status.trail[i].right.x, status.trail[i].right.y, status.trail[i].right.z )
-		};
-		add_trail(player, new_coords);
+	var player = create_player(status.id, status.pos, status.rot, false, status.user_name);
+	if (player) { // Do not proceed if the player has already been destroyed
+		create_trail(player, status.trail);
+		calculate_rank();
 	}
 });
 
+function create_trail(player, trail) {
+	for ( var i = 0; i < trail.length; i++ ) {
+		var new_coords = {
+			left : new THREE.Vector3(trail[i].left.x, trail[i].left.y, trail[i].left.z),
+			right : new THREE.Vector3(trail[i].right.x, trail[i].right.y, trail[i].right.z )
+		};
+		add_trail(player, new_coords);
+	}
+}
+
 socket.on("destroy", function(status) {
 	if ( players.has(status.id) ) {
-		explode( players.get(status.id) );
+		if (status.reason == "disconnection") {
+			scene.remove( players.get(status.id) );
+			scene.remove( players.get(status.id).trail_mesh );
+			players.delete(status.id);
+			calculate_rank();
+		}
+		else {
+			explode( players.get(status.id) );
+		}
+	}
+	else {
+		players.set( status.id, {score: 0, disconnected: true} );
+		// Player disconnected before connect message received
 	}
 	if (status.id == own_id) {
 		clearInterval(send_data_id);
@@ -284,7 +337,6 @@ socket.on("config", function(config) {
 	players = new Map();
 	camera = new THREE.PerspectiveCamera(field_of_view, window.innerWidth/game_height, 0.1, 1000);
 	scene = new THREE.Scene();
-	//scene.add(new THREE.AmbientLight(0xffffff));
 	draw_moon();
 	draw_background();
 	draw_bounds();
@@ -332,6 +384,7 @@ window.addEventListener("resize", function() {
 	if (screen_status == "end") {
 		display_results();
 	}
+
 	requestAnimationFrame(render);
 });
 
@@ -367,6 +420,9 @@ window.addEventListener("keydown", function(e) {
 		else if (e.key == "d" || e.key == "D") {
 			roll = "CW";
 		}
+		else if (e.key == " ") {
+			draw_leaders();
+		}
 	}
 });
 window.addEventListener("keyup", function(e) {
@@ -384,8 +440,11 @@ window.addEventListener("mouseup", function() {
 
 /* GRAPHICS */
 
-function create_player(player_id, pos, rot, add_camera) {
-	var material = standard_material.clone();
+function create_player(player_id, pos, rot, add_camera, user_name) {
+	if (players.has(player_id) && players.get(player_id).disconnected) {
+		return false;
+	}
+	var material = plane_material.clone();
 	var player = new THREE.Mesh(plane_geometry, material);
 	player.prop = new THREE.Mesh(prop_geometry, material);
 	player.prop.position.set(0, 5.7, 0.8);
@@ -396,13 +455,13 @@ function create_player(player_id, pos, rot, add_camera) {
 	player.right_guide.position.set(7, 2, 0);
 	player.add(player.left_guide);
 	player.add(player.right_guide);
-	if (add_camera == true) {
+	if (add_camera) {
 		player.add(camera);
-		camera.position.set(0, -25, 25);
-		camera.lookAt(0, 7, 0);
+		camera.position.set(camera_position.x, camera_position.y, camera_position.z);
+		camera.lookAt(camera_position.x, camera_position.y + 1, camera_position.z);
 		player.light = new THREE.PointLight(0xffffff, 2, 200);
 		player.add(player.light);
-		player.light.position.set(0, 0, 10);
+		player.light.position.set(0, 0, 0);
 	}
 	player.position.set(pos.x, pos.y, pos.z);
 	player.setRotationFromEuler( new THREE.Euler(rot._x, rot._y, rot._z, rot._order) );
@@ -423,6 +482,9 @@ function create_player(player_id, pos, rot, add_camera) {
 	player.trail_geometry.addAttribute("normal", normal_buffer);
 	player.fade_id = -1;
 	player.destroyed = false;
+	player.user_name = user_name;
+	player.seq = 0;
+	player.score = players.has(player_id) ? players.get(player_id).score : 0;
 	players.set(player_id, player);
 	return player;
 }
@@ -524,7 +586,7 @@ function draw_time() {
 
 function explode(player) {
 	player.destroyed = true;
-	scene.remove(player.trail_geometry);
+	scene.remove(player.trail_mesh);
 	player.material.transparent = true;
 	player.fade_id = setInterval(fade_away, fade_rate, player);
 }
@@ -535,11 +597,32 @@ function fade_away(player) {
 		scene.remove(player);
 		scene.remove(player.trail_mesh);
 		requestAnimationFrame(render);
-		console.log("OK.");
 	}
 	else {
 		player.material.opacity -= fade_increment;
 		requestAnimationFrame(render);
+	}
+}
+
+function draw_leaders() {
+	if (leaders.innerHTML != "") {
+		leaders.innerHTML = "";
+		return;
+	}
+	player_info = [];
+	for ( var player of players.values() ) {
+		if (!player.disconnected) {
+			player_info.push( { user_name: player.user_name, player_id: player.player_id, score: player.score} );
+		}
+	}
+	player_info.sort( (a, b) => (a.score > b.score) ? -1 : 1 );
+	for (var player of player_info) {
+		if (player.player_id == own_id) {
+			leaders.innerHTML += "<span style=\"font-weight: bold\">" + player.user_name + ": " + player.score + "</span><br>"
+		}
+		else {
+			leaders.innerHTML += player.user_name + ": " + player.score + "<br>"
+		}
 	}
 }
 
@@ -549,12 +632,14 @@ function set_visibility(type) {
 		game_screen.style.visibility = "visible";
 		gas_bar.style.visibility = "visible";
 		timer.style.visibility = "visible";
+		rank.style.visibility = "visible";
 	}
 	else if (type == "text") {
 		main_screen.style.visibility = "visible";
 		game_screen.style.visibility = "hidden";
 		gas_bar.style.visibility = "hidden";
 		timer.style.visibility = "hidden";
+		rank.style.visibility = "hidden";
 	}
 }
 set_visibility("text");
