@@ -1,10 +1,20 @@
-A three-dimensional version of Snake.
+**How to Run**
 
-Running the game:
+To run the game on your local machine, enter the following commands:
 
-To run the game, execute the server-side code (stored in the file "server.js") using Node.js, then open a connection to the server on port 3000 using a standard browser.
+```
+git clone https://github.com/vungureanu/plane-game.git
+cd plane-game
+npm install
+node js/server.js
+```
+Then establish a connection on port 3000 using your web browser.  One assumes the role of a pilot whose plane leaves a toxic plume in its wake; the objective of the game is to entangle one's opponents in this plume.  The pitch and yaw of the plane can be controlled using the mouse, while its roll can be controlled using the *a* and *d* keys.  Clicking the mouse causes the plane to travel faster, but consumes gas; traveling at the normal speed replenishes the available gas.  If the plane travels outside of the playing arena, it will reappear at the opposite end. 
 
-Documentation:
+**Documentation**
+
+**Overview**
+
+Each player is represented by a Player object, which identifies the player via a unique ID and holds information about the location within the arena of the player's plane and the input received from the player.
 
 The following variables can be configured on the server side:
 
