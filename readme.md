@@ -14,7 +14,9 @@ Then establish a connection on port 3000 using your web browser.  One assumes th
 
 **Overview**
 
-Each player is represented by a Player object, which identifies the player via a unique ID and holds information about the location within the arena of the player's plane and the input received from the player.
+Each player is represented by a Player object, which identifies the player via a unique ID.  This object holds information about the input received from the player and about the player's plane, including its location, rotation, and the shape of its plume.  The shape of a plume is represented by `trail_length` pairs of coordinates; the last pair corresponds to the current location of the plane's wing-tips, the second-to-last pair to their previous location, and so on.  The plume is depicted by a collection of triangles, each of which represents a stream of plume particles issuing from the plane's wings.  When a new pair of coordinates is added, the oldest pair is removed to simulate the particles' dissipation.
+
+Two consecutive pairs of plume particles define a quadrilateral which can be approximated by a parallelogram.    The playing arena is partitioned into a grid of cubes; planes and plume particles must inform the cube in question when entering or leaving (or dissipating, as the case may be).  
 
 The following variables can be configured on the server side:
 
