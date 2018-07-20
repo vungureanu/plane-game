@@ -9,7 +9,6 @@ const gas_bar = document.getElementById("gasBar");
 const gas_context = gas_bar.getContext("2d");
 const timer = document.getElementById("timer");
 const rank = document.getElementById("rank");
-const leaders =  document.getElementById("leaders");
 var socket = io();
 const num_stars = 100;
 const moon_texture = new THREE.TextureLoader().load("resources/moon.jpg");
@@ -17,6 +16,8 @@ var plane_template;
 const slow_rotate = 0.3;
 const fast_rotate = 0.6;
 const camera_position = new THREE.Vector3(0, -1, 2);
+const score_table = document.getElementById("score_table");
+var score_table_body = document.getElementById("score_table_body");
 
 const texture = new THREE.TextureLoader().load("resources/plane_data/BodyTexture.bmp");
 const plane_material = new THREE.MeshBasicMaterial( {map: texture} );
@@ -25,24 +26,22 @@ var prop_geometry = new THREE.BufferGeometry();
 const objLoader = new THREE.OBJLoader();
 objLoader.setPath('resources/plane_data/');
 objLoader.load('plane.obj', function(object) {
-	geometry_array = object.children.map( (child) => child.geometry );
+	geometry_array = object.children.map(child => child.geometry);
 	plane_geometry = THREE.BufferGeometryUtils.mergeBufferGeometries(geometry_array);
 });
 objLoader.load('prop.obj', function(object) {
 	prop_geometry = object.children[0].geometry;
 });
 
-const trail_material = new THREE.MeshStandardMaterial({
+const other_material = new THREE.MeshStandardMaterial({
 		color: 0xff0000,
 		side : THREE.DoubleSide,
-		//transparent : true,
-		//opacity: 0.5
 });
 const own_material = new THREE.MeshBasicMaterial({
 		color: 0x00ff00,
 		side : THREE.DoubleSide,
-		//transparent : true,
-		//opacity: 0.5
+		transparent : true,
+		opacity: 0.5
 });
 const bounds_front = {
 	color: 0x3065c1,
@@ -68,11 +67,10 @@ var x_frac;
 var y_frac;
 var roll;
 var players = new Map();
-var click = false;
 var own_id = -1;
 var send_data_id;
 var render_id;
-var own_player = { destroyed: false };
+var own_player = { click: false, destroyed: false };
 var sides = {};
 var camera = new THREE.PerspectiveCamera(field_of_view, window.innerWidth/game_height, 0.1, 1000);
 var screen_status = "start";
@@ -132,7 +130,7 @@ function format_text(msg) {
 	}
 }
 
-function display_results() {
+function display_results(results) {
 	prepare_screen();
 	if (results.length == 0) { // Perhaps the player joined the game right at the end, and has received only the "results_sent" message 
 		format_text(enter_name + user_name + start_message);
@@ -149,7 +147,8 @@ function display_results() {
 	total_results = -1;
 }
 
-function draw_polygon(vertex_array, player = false) {
+function draw_quadrilateral(vertex_array, player = false) {
+	// Consecutive vertices in "vertex_array", including first and last vertices, should be adjacent
 	if (player) {
 		var trail_array = player.trail_geometry.attributes.position.array;
 		var normal_array = player.trail_geometry.attributes.normal.array;
@@ -157,17 +156,15 @@ function draw_polygon(vertex_array, player = false) {
 	}
 	else {
 		var geometry = new THREE.BufferGeometry();
-		geometry.addAttribute( "position", new THREE.BufferAttribute(new Float32Array(18), 3) ); // The quadrilateral is composed of two triangular faces, so we need 6 vertices, each of which has 3 coordinates; whence the 18. 
+		geometry.addAttribute( "position", new THREE.BufferAttribute(new Float32Array(18), 3) ); // 2 triangular faces * 3 vertices/face * 3 coordinates/vertex = 18 vertices
 		geometry.addAttribute( "normal", new THREE.BufferAttribute(new Float32Array(18), 3) );
-		geometry.attributes.position.needsUpdate = true;
-		geometry.attributes.normal.needsUpdate = true;
 		var trail_array = geometry.attributes.position.array;
 		var normal_array = geometry.attributes.normal.array;
 		var index = 0;
 	}
-	var normal = new THREE.Vector3().crossVectors( minus(vertex_array[1], vertex_array[0]), minus(vertex_array[3], vertex_array[1]) );
-	normal.normalize();
-	var faces = [0, 1, 2, 2, 3, 0];
+	var normal = new THREE.Vector3().crossVectors( minus(vertex_array[1], vertex_array[0]), minus(vertex_array[3], vertex_array[1]) ); // Approximate normal to quadrilateral (quadrilateral need not be planar)
+	normal.normalize(); // normalizing the zero vector seems to leave it unchanged
+	var faces = [0, 1, 2, 2, 3, 0]; // The first face is formed by the first three vertices in "vertex_array", and the second by the first and last two vertices
 	for (var i = 0; i < faces.length; i++) {
 		trail_array[index + 3 * i] = vertex_array[faces[i]].x;
 		trail_array[index + 3 * i + 1] = vertex_array[faces[i]].y;
@@ -183,16 +180,6 @@ function minus(v1, v2) {
 	return new THREE.Vector3(v1.x - v2.x, v1.y - v2.y, v1.z - v2.z);
 }
 
-function add_trail(player, new_coords) {
-	player.seq++;
-	if (player.old_coords.left.distanceTo(new_coords.left) > outer_radius / 2) {
-		player.old_coords = new_coords;
-	}
-	draw_polygon( [player.old_coords.left, player.old_coords.right, new_coords.right, new_coords.left], player );
-	player.trail_index = (player.trail_index + 18) % num_trail_vertices;
-	player.old_coords = new_coords;
-}
-
 /* CLIENT-SERVER COMMUNICATION */
 
 function send_data() {
@@ -200,7 +187,7 @@ function send_data() {
 		id: own_id,
 		x_frac: x_frac,
 		y_frac: y_frac,
-		click: click,
+		click: own_player.click,
 		roll: roll
 	});
 }
@@ -208,41 +195,43 @@ function send_data() {
 socket.on("update", function(status) {
 	if ( (screen_status == "waiting" || screen_status == "game") && players.has(status.id) && !players.get(status.id).destroyed ) {
 		var player = players.get(status.id);
-		var rot = new THREE.Euler(status.rot._x, status.rot._y, status.rot._z, status.rot._order);
-		player.setRotationFromEuler(rot);
-		player.position.set(status.pos.x, status.pos.y, status.pos.z);
-		if (status.id == own_id) {
-			update_bounds();
-			update_gas(status.gas);
-		}
-		player.prop.rotateY(click ? fast_rotate : slow_rotate);
-		player.updateMatrixWorld();
 		if (player.seq < status.seq) {
-			add_trail( player, get_coords(player) );
+			player.setRotationFromEuler( new THREE.Euler(status.rot._x, status.rot._y, status.rot._z, status.rot._order) );
+			player.position.set(status.pos.x, status.pos.y, status.pos.z);
+			if (status.id == own_id) {
+				update_bounds();
+				update_gas(status.gas);
+			}
+			else {
+				player.click = status.click;
+			}
+			player.rotate_prop();
+			player.updateMatrixWorld(); 
+			player.add_trail( player.get_coords() );
 			player.seq = status.seq;
+			requestAnimationFrame(render);
 		}
-		requestAnimationFrame(render);
 	}
 });
 
 socket.on("scores", function(array) {
-	for (var el of array) {
-		if (players.has(el.player_id)) {
-			players.get(el.player_id).score = el.score;
+	for (var player of array) {
+		if (players.has(player.plane_id)) {
+			players.get(player.plane_id).score = player.score;
 		}
 		else {
-			players.set(el.player_id, {score: el.score, disconnected: false});
+			players.set(player.plane_id, {score: player.score, disconnected: false});
 		}
 	}
 	calculate_rank();
 });
 
-socket.on("score", function(player_id) {
-	if (players.has(player_id)) {
-			players.get(player_id).score++;
+socket.on("score", function(plane_id) {
+	if (players.has(plane_id)) {
+			players.get(plane_id).score++;
 	}
 	else { // Client has not yet received information about player
-		players.set( player_id, {score: 1, disconnected: false} );
+		players.set( plane_id, {score: 1, disconnected: false} );
 	}
 	calculate_rank();
 });
@@ -253,6 +242,10 @@ function calculate_rank() {
 		current_rank += (player.score > own_player.score) ? 1 : 0;
 	}
 	rank.innerHTML = "Rank: " + current_rank + '/' + players.size;
+	if (score_table.style.visibility == "visible") {
+		score_table.style.visibility = "hidden";
+		draw_scoreboard();
+	}
 }
 
 function render() {
@@ -264,6 +257,7 @@ function render() {
 }
 
 socket.on("id", function(status) {
+	console.log("ID:", status);
 	if (own_id != -1) {
 		own_player.remove(camera);
 	}
@@ -271,7 +265,8 @@ socket.on("id", function(status) {
 	roll = "None";
 	x_frac = 0;
 	y_frac = 0;
-	own_player = create_player(status.id, status.pos, status.rot, true, status.user_name);
+	own_player = new Player(status.id, status.pos, status.rot, own_player.click, status.user_name);
+	own_player.add_camera();
 	if (screen_status == "waiting") {
 		screen_status = "game";
 		set_visibility("game");
@@ -282,22 +277,13 @@ socket.on("id", function(status) {
 });
 
 socket.on("add", function(status) {
-	var player = create_player(status.id, status.pos, status.rot, false, status.user_name);
+	console.log("Adding:", status);
+	var player = new Player(status.id, status.pos, status.rot, false, status.user_name);
 	if (player) { // Do not proceed if the player has already been destroyed
-		create_trail(player, status.trail);
+		player.create_trail(status.trail, status.seq);
 		calculate_rank();
 	}
 });
-
-function create_trail(player, trail) {
-	for ( var i = 0; i < trail.length; i++ ) {
-		var new_coords = {
-			left : new THREE.Vector3(trail[i].left.x, trail[i].left.y, trail[i].left.z),
-			right : new THREE.Vector3(trail[i].right.x, trail[i].right.y, trail[i].right.z )
-		};
-		add_trail(player, new_coords);
-	}
-}
 
 socket.on("destroy", function(status) {
 	if ( players.has(status.id) ) {
@@ -310,6 +296,7 @@ socket.on("destroy", function(status) {
 		else {
 			explode( players.get(status.id) );
 		}
+		players.delete(status.id);
 	}
 	else {
 		players.set( status.id, {score: 0, disconnected: true} );
@@ -319,12 +306,6 @@ socket.on("destroy", function(status) {
 		clearInterval(send_data_id);
 		own_id = -1;
 	}
-});
-
-socket.on("game_over", function() {
-	clearInterval(send_data_id);
-	screen_status = "end";
-	set_visibility("text");
 });
 
 socket.on("config", function(config) {
@@ -349,20 +330,12 @@ socket.on("time", function(sl) {
 	draw_time();
 });
 
-socket.on("result", function(status) {
-	results.push( {user_name: status.user_name, score: status.score} );
-	if (results.length == total_results) {
-		results.sort( (a, b) => a.score > b.score ? -1 : 1 );
-		display_results();
-	}
-});
-
-socket.on("results_sent", function(length) {
-	total_results = length;
-	if (results.length == total_results) {
-		results.sort( (a, b) => a.score > b.score ? -1 : 1 );
-		display_results();
-	}
+socket.on("result", function(results) {
+	clearInterval(send_data_id);
+	results.sort( (a, b) => a.score > b.score ? -1 : 1 );
+	display_results(results);
+	screen_status = "end";
+	set_visibility("text");
 });
 
 /* CONTROLS */
@@ -389,7 +362,11 @@ window.addEventListener("resize", function() {
 });
 
 window.addEventListener("mousedown", function() {
-	click = true;
+	own_player.click = true;
+});
+
+window.addEventListener("mouseup", function() {
+	own_player.click = false;
 });
 
 window.addEventListener("keydown", function(e) {
@@ -421,7 +398,7 @@ window.addEventListener("keydown", function(e) {
 			roll = "CW";
 		}
 		else if (e.key == " ") {
-			draw_leaders();
+			draw_scoreboard();
 		}
 	}
 });
@@ -434,63 +411,90 @@ window.addEventListener("keyup", function(e) {
 	}
 });
 
-window.addEventListener("mouseup", function() {
-	click = false;
-});
 
 /* GRAPHICS */
 
-function create_player(player_id, pos, rot, add_camera, user_name) {
-	if (players.has(player_id) && players.get(player_id).disconnected) {
-		return false;
-	}
+function Player(plane_id, pos, rot, click, user_name) {
+	// Add plane and subsidiary objects to scene
 	var material = plane_material.clone();
-	var player = new THREE.Mesh(plane_geometry, material);
-	player.prop = new THREE.Mesh(prop_geometry, material);
-	player.prop.position.set(0, 5.7, 0.8);
-	player.add(player.prop);
-	player.left_guide = new THREE.Object3D();
-	player.right_guide = new THREE.Object3D();
-	player.left_guide.position.set(-7, 2, 0);
-	player.right_guide.position.set(7, 2, 0);
-	player.add(player.left_guide);
-	player.add(player.right_guide);
-	if (add_camera) {
-		player.add(camera);
-		camera.position.set(camera_position.x, camera_position.y, camera_position.z);
-		camera.lookAt(camera_position.x, camera_position.y + 1, camera_position.z);
-		player.light = new THREE.PointLight(0xffffff, 2, 200);
-		player.add(player.light);
-		player.light.position.set(0, 0, 0);
-	}
-	player.position.set(pos.x, pos.y, pos.z);
-	player.setRotationFromEuler( new THREE.Euler(rot._x, rot._y, rot._z, rot._order) );
-	player.updateMatrixWorld();
-	scene.add(player);
-	player.player_id = player_id;
-	player.old_coords = { left: player.left_guide.getWorldPosition(), right: player.right_guide.getWorldPosition() };
-	player.trail_index = 0;
-	player.trail_geometry = new THREE.BufferGeometry();
-	player.trail_mesh = new THREE.Mesh(player.trail_geometry, (own_id == player_id) ? own_material : trail_material);
-	player.trail_mesh.frustumCulled = false;
-	scene.add(player.trail_mesh);
+	THREE.Mesh.call(this, plane_geometry, material);
+	this.prop = new THREE.Mesh(prop_geometry, material);
+	this.prop.position.set(0, 5.7, 0.8);
+	this.add(this.prop);
+	this.left_guide = new THREE.Object3D();
+	this.right_guide = new THREE.Object3D();
+	this.left_guide.position.set(-7, 2, 0);
+	this.right_guide.position.set(7, 2, 0);
+	this.add(this.left_guide);
+	this.add(this.right_guide);
+	this.position.set(pos.x, pos.y, pos.z);
+	this.setRotationFromEuler( new THREE.Euler(rot._x, rot._y, rot._z, rot._order) );
+	this.updateMatrixWorld();
+	scene.add(this);
+	// Initialize values
+	this.seq = 1;
+	this.click = click;
+	this.plane_id = plane_id;
+	this.fade_id = -1;
+	this.destroyed = false;
+	this.user_name = user_name;
+	this.score = players.has(plane_id) ? players.get(plane_id).score : 0;
+	players.set(plane_id, this);
+	// Add trail
+	this.old_coords = { left: this.left_guide.getWorldPosition(), right: this.right_guide.getWorldPosition() };
+	this.trail_index = 0; // The index into which to insert the next vertices 
+	this.trail_geometry = new THREE.BufferGeometry();
+	this.trail_mesh = new THREE.Mesh(this.trail_geometry, (own_id == plane_id) ? own_material : other_material);
+	this.trail_mesh.frustumCulled = false;
+	scene.add(this.trail_mesh);
 	var trail_vertices = new Float32Array(num_trail_vertices);
-	var position_buffer = new THREE.BufferAttribute(trail_vertices, 3);
-	player.trail_geometry.addAttribute("position", position_buffer);
+	var position_buffer = new THREE.BufferAttribute(trail_vertices, 3); // Holds the coordinates of the vertices in the trail
+	this.trail_geometry.addAttribute("position", position_buffer);
 	var trail_normals = new Float32Array(num_trail_vertices);
-	var normal_buffer = new THREE.BufferAttribute(trail_normals, 3);
-	player.trail_geometry.addAttribute("normal", normal_buffer);
-	player.fade_id = -1;
-	player.destroyed = false;
-	player.user_name = user_name;
-	player.seq = 0;
-	player.score = players.has(player_id) ? players.get(player_id).score : 0;
-	players.set(player_id, player);
-	return player;
+	var normal_buffer = new THREE.BufferAttribute(trail_normals, 3); // Holds the normals to each triangle in the trail
+	this.trail_geometry.addAttribute("normal", normal_buffer);
 }
 
-function get_coords(player) {
-	return { left: player.left_guide.getWorldPosition(), right: player.right_guide.getWorldPosition() };
+Player.prototype = Object.create(THREE.Mesh.prototype);
+Player.prototype.constructor = Player;
+Player.prototype.rotate_prop = function() {
+	this.prop.rotateY(this.click ? fast_rotate : slow_rotate);
+}
+
+Player.prototype.get_coords = function() {
+	return { left: this.left_guide.getWorldPosition(), right: this.right_guide.getWorldPosition() };
+}
+
+Player.prototype.add_trail = function(new_coords) {
+	this.seq++;
+	if (this.old_coords.left.distanceTo(new_coords.left) < outer_radius / 2) { // Plane did not leave arena
+		draw_quadrilateral( [this.old_coords.left, this.old_coords.right, new_coords.right, new_coords.left], player = this );
+	}
+	else {
+		draw_quadrilateral( [new_coords.left, new_coords.right, new_coords.right, new_coords.left], player = this );
+	}
+	this.trail_index = (this.trail_index + 18) % num_trail_vertices;
+	this.old_coords = new_coords;
+}
+
+Player.prototype.create_trail = function(trail, seq) {
+	for ( var i = 0; i < trail.length; i++ ) {
+		var new_coords = {
+			left : new THREE.Vector3(trail[i].left.x, trail[i].left.y, trail[i].left.z),
+			right : new THREE.Vector3(trail[i].right.x, trail[i].right.y, trail[i].right.z )
+		};
+		this.add_trail(new_coords);
+	}
+	this.seq = seq;
+}
+
+Player.prototype.add_camera = function() {
+	this.add(camera);
+	camera.position.set(camera_position.x, camera_position.y, camera_position.z);
+	camera.lookAt(camera_position.x, camera_position.y + 1, camera_position.z);
+	var light = new THREE.PointLight(0xffffff, 2, 200);
+	light.position.set(0, 0, 0);
+	this.add(light);
 }
 
 function draw_background() {
@@ -516,6 +520,7 @@ function draw_background() {
 	}
 	var stars = new THREE.Mesh(merged_geometry, material);
 	scene.add(stars);
+	stars.matrixAutoUpdate = false;
 }
 
 function update_gas(gas) {
@@ -550,22 +555,22 @@ function draw_bounds() {
 	var p5 = new THREE.Vector3(l, 0, l);
 	var p6 = new THREE.Vector3(l, l, l);
 	var p7 = new THREE.Vector3(l, l, 0);
-	var geometry0 = draw_polygon( [p0, p1, p2, p3] );
+	var geometry0 = draw_quadrilateral( [p0, p1, p2, p3] );
 	sides.x0 = new THREE.MeshBasicMaterial(bounds_back);
 	scene.add( new THREE.Mesh(geometry0, sides.x0) );
-	var geometry1 = draw_polygon( [p4, p5, p6, p7] );
+	var geometry1 = draw_quadrilateral( [p4, p5, p6, p7] );
 	sides.x1 = new THREE.MeshBasicMaterial(bounds_front);
 	scene.add( new THREE.Mesh(geometry1, sides.x1) );
-	var geometry2 = draw_polygon( [p0, p1, p5, p4] );
+	var geometry2 = draw_quadrilateral( [p0, p1, p5, p4] );
 	sides.y0 = new THREE.MeshBasicMaterial(bounds_front);
 	scene.add( new THREE.Mesh(geometry2, sides.y0) );
-	var geometry3 = draw_polygon( [p3, p2, p6, p7] );
+	var geometry3 = draw_quadrilateral( [p3, p2, p6, p7] );
 	sides.y1 = new THREE.MeshBasicMaterial(bounds_back);
 	scene.add( new THREE.Mesh(geometry3, sides.y1) );
-	var geometry4 = draw_polygon( [p0, p3, p7, p4] );
+	var geometry4 = draw_quadrilateral( [p0, p3, p7, p4] );
 	sides.z0 = new THREE.MeshBasicMaterial(bounds_back);
 	scene.add( new THREE.Mesh(geometry4, sides.z0) );
-	var geometry5 = draw_polygon( [p1, p2, p6, p5] );
+	var geometry5 = draw_quadrilateral( [p1, p2, p6, p5] );
 	sides.z1 = new THREE.MeshBasicMaterial(bounds_front);
 	scene.add( new THREE.Mesh(geometry5, sides.z1) );
 }
@@ -604,35 +609,48 @@ function fade_away(player) {
 	}
 }
 
-function draw_leaders() {
-	if (leaders.innerHTML != "") {
-		leaders.innerHTML = "";
+function draw_scoreboard() {
+	var new_body = document.createElement("tbody");
+	score_table.replaceChild(new_body, score_table_body);
+	score_table_body = new_body;
+	score_table_cells = [];
+	for (var i = 0; i < players.size; i++) {
+		new_row = score_table.insertRow();
+		score_table_cells.push( {name:  new_row.insertCell(), score: new_row.insertCell()} );
+	}
+	if (score_table.style.visibility == "visible") {
+		score_table.style.visibility = "hidden";
 		return;
 	}
-	player_info = [];
+	score_table.style.visibility = "visible";
+	var player_info = [];
 	for ( var player of players.values() ) {
 		if (!player.disconnected) {
-			player_info.push( { user_name: player.user_name, player_id: player.player_id, score: player.score} );
+			player_info.push( { user_name: player.user_name, plane_id: player.plane_id, score: player.score} );
 		}
 	}
 	player_info.sort( (a, b) => (a.score > b.score) ? -1 : 1 );
-	for (var player of player_info) {
-		if (player.player_id == own_id) {
-			leaders.innerHTML += "<span style=\"font-weight: bold\">" + player.user_name + ": " + player.score + "</span><br>"
+	for (var i = 0; i < player_info.length; i++) {
+		if (player_info[i].plane_id == own_id) {
+			score_table_cells[i].name.innerHTML = "<strong>" + player_info[i].user_name + "</strong>";
+			score_table_cells[i].score.innerHTML = "<strong>" + player_info[i].score + "</strong>";
 		}
 		else {
-			leaders.innerHTML += player.user_name + ": " + player.score + "<br>"
+			score_table_cells[i].name.innerHTML = player_info[i].user_name;
+			score_table_cells[i].score.innerHTML = player_info[i].score;
 		}
 	}
 }
 
 function set_visibility(type) {
+	// Determine whether game elements (e.g., timer) or text elements (e.g., ranking) should be visible
 	if (type == "game") {
 		main_screen.style.visibility = "hidden";
 		game_screen.style.visibility = "visible";
 		gas_bar.style.visibility = "visible";
 		timer.style.visibility = "visible";
 		rank.style.visibility = "visible";
+		score_table.visibility = "visible";
 	}
 	else if (type == "text") {
 		main_screen.style.visibility = "visible";
@@ -640,6 +658,8 @@ function set_visibility(type) {
 		gas_bar.style.visibility = "hidden";
 		timer.style.visibility = "hidden";
 		rank.style.visibility = "hidden";
+		score_table.visibility = "hidden";
 	}
 }
+
 set_visibility("text");

@@ -37,9 +37,14 @@
 				white-space: nowrap;
 				top: 45px;
 			}
-			#leaders {
-				white-space: pre;
+			#score_table {
+				border: 1px solid white;
+				background-color: rgba(0, 0, 0, 0.5);
 				top: 105px;
+				visibility: hidden;
+			}
+			td {
+				padding: 5px;
 			}
 		</style>
 	</head>
@@ -48,14 +53,15 @@
 		<canvas id="game_screen"></canvas>
 		<div id="timer" class="game_info"></div>
 		<div id="rank" class="game_info"></div>
-		<div id="leaders" class="game_info"></div>
+		<table id="score_table", class="game_info">
+			<tbody id="score_table_body"></tbody>
+		</table>
 		<canvas id="gasBar"></canvas>
 		<script src="/socket.io/socket.io.js"></script>
 		<script src="/js/three.js"></script>
 		<script src="js/OBJLoader.js"></script>
 		<script src="js/MTLLoader.js"></script>
 		<script src="js/BufferGeometryUtils.js"></script>
-		<script src="orbit.js"></script>
 		<script src="js/client.js"></script>
 	</body>
 </html>
