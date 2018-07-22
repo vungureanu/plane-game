@@ -18,6 +18,9 @@ const fast_rotate = 0.6;
 const camera_position = new THREE.Vector3(0, -1, 2);
 const score_table = document.getElementById("score_table");
 var score_table_body = document.getElementById("score_table_body");
+var buffer = 0;
+
+/* LOAD GRAPHICS */
 
 const texture = new THREE.TextureLoader().load("resources/plane_data/BodyTexture.bmp");
 const plane_material = new THREE.MeshBasicMaterial( {map: texture} );
@@ -56,35 +59,33 @@ const bounds_back = {
 	side: THREE.BackSide
 };
 var trail_length;
-const send_interval = 100;
-const star_offset = 300;
-var num_trail_vertices;
-const field_of_view = 75;
-var outer_radius;
-var inner_radius;
+const send_interval = 25;
+const star_offset = 300; // Minimum distance of stars from arena 
+var num_trail_vertices; // Total number of vertices in trail left by plane
+const field_of_view = 90; // Field of view of camera, in degrees
+var outer_radius; // Half of arena's length
+var inner_radius; // Radius of obstacle at center of arena
 var initial_gas;
 var x_frac;
 var y_frac;
-var roll;
-var players = new Map();
-var own_id = -1;
+var roll; // Indicates whether player wishes plane to roll clockwise, counterclockwise, or not at all
+var planes = new Map(); // Map which associates plane IDs with planes
+var players = new Map(); // Map which associates user-names with scores
 var send_data_id;
-var render_id;
-var own_player = { click: false, destroyed: false };
+var own_plane = { click: false, destroyed: false }; // "own_plane" is either this minimal object, or the user's "Plane"
 var sides = {};
 var camera = new THREE.PerspectiveCamera(field_of_view, window.innerWidth/game_height, 0.1, 1000);
 var screen_status = "start";
 var buffer = 20;
-const vis_dist = 30;
-var results = [];
-var total_results = -1;
+const vis_dist = 30; // Paramter used in determining opacity of boundary components
 const vertical_spacing = 0.75;
 const enter_name = "\n#CONTRAILS\n\n\nEnter nickname: ";
-const start_message = "\n\n\nUse the mouse to maneuver; click to accelerate.\nTry to ensnare other players in your trail, but avoid running into other players' trails.\nIf you venture beyond the bounds of the arena, you will reappear on the opposite side.\n\n\nPress ENTER to start.\n";
+const start_message = "\n\n\nUse the mouse to maneuver; click to accelerate.\nTry to ensnare other planes in your trail, but avoid running into other planes' trails.\nIf you venture beyond the bounds of the arena, you will reappear on the opposite side.\n\n\nPress ENTER to start.\n";
 var user_name = "";
 const fade_rate = 20;
 const fade_increment = 0.05;
 const accepted_characters = /[0-9 + a-z + A-Z + _]/;
+var current_results = null; // Holds latest results
 
 /* GRAPHICS */
 
@@ -114,7 +115,7 @@ function format_text(msg) {
 	var offset = (main_screen.height - total_height) / 2; 
 	screen_context.textBaseline = "middle";
 	screen_context.textAlign = "center";
-	screen_context.fillStyle = "rgb(255, 255, 255)";
+	screen_context.fillStyle = "white";
 	var i = 0;
 	for (var line of lines) {
 		if (line.charAt(0) == '#') {
@@ -130,21 +131,21 @@ function format_text(msg) {
 	}
 }
 
-function display_results(results) {
+function display_results() {
 	prepare_screen();
-	if (results.length == 0) { // Perhaps the player joined the game right at the end, and has received only the "results_sent" message 
+	if (current_results.length == 0) { // Perhaps the player joined the game right at the end, and has received only the "results_sent" message 
 		format_text(enter_name + user_name + start_message);
+		screen_status = "start";
 		return false;
 	}
 	var msg = "#LEADERBOARD\n\n\n"
-	maximum_length = results.map(el => el.user_name.length).reduce( (prev, cur) => Math.max(prev, cur) );
-	for (var result of results) {
+	maximum_length = current_results.map(el => el.user_name.length).reduce( (prev, cur) => Math.max(prev, cur) );
+	for (var result of current_results) {
 		msg += result.user_name + " ".repeat(maximum_length - result.user_name.length + 3) + result.score + "\n";
 	}
 	msg += "\n\n\nPress ENTER to continue"
 	format_text(msg);
-	results = [];
-	total_results = -1;
+	current_results = [];
 }
 
 function draw_quadrilateral(vertex_array, player = false) {
@@ -184,31 +185,31 @@ function minus(v1, v2) {
 
 function send_data() {
 	socket.emit("status", {
-		id: own_id,
+		id: own_plane.plane_id,
 		x_frac: x_frac,
 		y_frac: y_frac,
-		click: own_player.click,
+		click: own_plane.click,
 		roll: roll
 	});
 }
 
 socket.on("update", function(status) {
-	if ( (screen_status == "waiting" || screen_status == "game") && players.has(status.id) && !players.get(status.id).destroyed ) {
-		var player = players.get(status.id);
-		if (player.seq < status.seq) {
-			player.setRotationFromEuler( new THREE.Euler(status.rot._x, status.rot._y, status.rot._z, status.rot._order) );
-			player.position.set(status.pos.x, status.pos.y, status.pos.z);
-			if (status.id == own_id) {
+	if ( (screen_status == "waiting" || screen_status == "game") && planes.has(status.id) && !planes.get(status.id).destroyed ) {
+		var plane = planes.get(status.id);
+		if (plane.seq < status.seq) {
+			plane.setRotationFromEuler( new THREE.Euler(status.rot._x, status.rot._y, status.rot._z, status.rot._order) );
+			plane.position.set(status.pos.x, status.pos.y, status.pos.z);
+			if (status.id == own_plane.plane_id) {
 				update_bounds();
 				update_gas(status.gas);
 			}
 			else {
-				player.click = status.click;
+				plane.click = status.click;
 			}
-			player.rotate_prop();
-			player.updateMatrixWorld(); 
-			player.add_trail( player.get_coords() );
-			player.seq = status.seq;
+			plane.rotate_prop();
+			plane.updateMatrixWorld(); 
+			plane.add_trail( plane.get_coords() );
+			plane.seq = status.seq;
 			requestAnimationFrame(render);
 		}
 	}
@@ -216,40 +217,28 @@ socket.on("update", function(status) {
 
 socket.on("scores", function(array) {
 	for (var player of array) {
-		if (players.has(player.plane_id)) {
-			players.get(player.plane_id).score = player.score;
+		if (players.has(player.user_name)) {
+			players.set(player.user_name, player.score);
 		}
 		else {
-			players.set(player.plane_id, {score: player.score, disconnected: false});
+			players.set(player.user_name, player.score);
 		}
 	}
-	calculate_rank();
+	calculate_ranking();
 });
 
-socket.on("score", function(plane_id) {
-	if (players.has(plane_id)) {
-			players.get(plane_id).score++;
+socket.on("score", function(user_name) {
+	if (players.has(user_name)) {
+		players.set(user_name, players.get(user_name) + 1);
 	}
 	else { // Client has not yet received information about player
-		players.set( plane_id, {score: 1, disconnected: false} );
+		players.set(user_name, 1);
 	}
-	calculate_rank();
+	calculate_ranking();
 });
 
-function calculate_rank() {
-	var current_rank = 1;
-	for ( player of players.values() ) {
-		current_rank += (player.score > own_player.score) ? 1 : 0;
-	}
-	rank.innerHTML = "Rank: " + current_rank + '/' + players.size;
-	if (score_table.style.visibility == "visible") {
-		score_table.style.visibility = "hidden";
-		draw_scoreboard();
-	}
-}
-
 function render() {
-	for ( var player of players.values() ) {
+	for ( var player of planes.values() ) {
 		player.trail_geometry.attributes.position.needsUpdate = true;
 		player.trail_geometry.attributes.normal.needsUpdate = true;
 	}
@@ -257,54 +246,52 @@ function render() {
 }
 
 socket.on("id", function(status) {
-	console.log("ID:", status);
-	if (own_id != -1) {
-		own_player.remove(camera);
-	}
-	own_id = status.id;
+	user_name = status.user_name;
+	if (!players.has(user_name)) players.set(user_name, 0);
+	if (own_plane.destroyed) own_plane.remove(camera);
 	roll = "None";
 	x_frac = 0;
 	y_frac = 0;
-	own_player = new Player(status.id, status.pos, status.rot, own_player.click, status.user_name);
-	own_player.add_camera();
+	own_plane = new Plane(status.id, status.pos, status.rot, own_plane.click, own_material);
+	own_plane.add_camera();
 	if (screen_status == "waiting") {
 		screen_status = "game";
 		set_visibility("game");
 	}
-	calculate_rank();
+	calculate_ranking();
 	requestAnimationFrame(render);
 	send_data_id = setInterval(send_data, send_interval);
 });
 
 socket.on("add", function(status) {
-	console.log("Adding:", status);
-	var player = new Player(status.id, status.pos, status.rot, false, status.user_name);
-	if (player) { // Do not proceed if the player has already been destroyed
+	if (!planes.has(status.id)) { // Plane was not destroyed before this message was received
+		var player = new Plane(status.id, status.pos, status.rot, false, other_material);
+		if (!players.has(status.user_name)) players.set(status.user_name, 0);
 		player.create_trail(status.trail, status.seq);
-		calculate_rank();
+		calculate_ranking();
 	}
 });
 
 socket.on("destroy", function(status) {
-	if ( players.has(status.id) ) {
+	if ( planes.has(status.id) ) {
 		if (status.reason == "disconnection") {
-			scene.remove( players.get(status.id) );
-			scene.remove( players.get(status.id).trail_mesh );
-			players.delete(status.id);
-			calculate_rank();
+			scene.remove( planes.get(status.id) );
+			scene.remove( planes.get(status.id).trail_mesh );
+			planes.delete(status.id);
+			players.delete(status.user_name);
+			calculate_ranking();
 		}
 		else {
-			explode( players.get(status.id) );
+			explode( planes.get(status.id) );
 		}
-		players.delete(status.id);
+		planes.delete(status.id);
 	}
-	else {
-		players.set( status.id, {score: 0, disconnected: true} );
-		// Player disconnected before connect message received
+	else { // Plane destroyed before message to add plane received
+		planes.set( status.id, {score: 0, destroyed: true} );
 	}
-	if (status.id == own_id) {
+	if (status.id == own_plane.plane_id) {
 		clearInterval(send_data_id);
-		own_id = -1;
+		own_plane.plane_id = -1;
 	}
 });
 
@@ -314,8 +301,9 @@ socket.on("config", function(config) {
 	inner_radius = config.inner_radius;
 	outer_radius = config.outer_radius;
 	seconds_left = config.seconds_left;
+	buffer = config.buffer;
 	num_trail_vertices = (trail_length - 1) * 18;
-	players = new Map();
+	planes = new Map();
 	camera = new THREE.PerspectiveCamera(field_of_view, window.innerWidth/game_height, 0.1, 1000);
 	scene = new THREE.Scene();
 	draw_moon();
@@ -331,9 +319,10 @@ socket.on("time", function(sl) {
 });
 
 socket.on("result", function(results) {
+	current_results = results;
 	clearInterval(send_data_id);
-	results.sort( (a, b) => a.score > b.score ? -1 : 1 );
-	display_results(results);
+	current_results.sort( (a, b) => a.score > b.score ? -1 : 1 );
+	display_results();
 	screen_status = "end";
 	set_visibility("text");
 });
@@ -362,26 +351,22 @@ window.addEventListener("resize", function() {
 });
 
 window.addEventListener("mousedown", function() {
-	own_player.click = true;
+	own_plane.click = true;
 });
 
 window.addEventListener("mouseup", function() {
-	own_player.click = false;
+	own_plane.click = false;
 });
 
 window.addEventListener("keydown", function(e) {
-	if (screen_status != "game" ) {
+	if (screen_status == "start") {
 		if (e.key == "Enter") {
-			if (screen_status == "end") {
-				screen_status = "start";
-				format_text(enter_name + user_name + start_message);
-			}
-			else if (screen_status == "start") {
-				screen_status = "waiting";
-				socket.emit("start", user_name);
-			}
+			screen_status = "waiting";
+			players = new Map();
+			own_plane.destroyed = false;
+			socket.emit("start", user_name);
 		}
-		else if ( e.key.length == 1 && e.key.match(accepted_characters) ) {
+		else if ( e.key.length == 1 && e.key.match(accepted_characters) && user_name.length < 16 ) {
 			user_name += e.key;
 			format_text(enter_name + user_name + start_message);
 		}
@@ -390,7 +375,7 @@ window.addEventListener("keydown", function(e) {
 			format_text(enter_name + user_name + start_message);
 		}
 	}
-	else {
+	else if (screen_status == "game") {
 		if (e.key == "a" || e.key == "A") {
 			roll = "CCW";
 		}
@@ -398,8 +383,12 @@ window.addEventListener("keydown", function(e) {
 			roll = "CW";
 		}
 		else if (e.key == " ") {
-			draw_scoreboard();
+			score_table.style.visibility = (score_table.style.visibility == "visible") ? "hidden" : "visible";
 		}
+	}
+	else if (screen_status == "end" && e.key == "Enter") {
+		screen_status = "start";
+		format_text(enter_name + user_name + start_message);
 	}
 });
 window.addEventListener("keyup", function(e) {
@@ -411,10 +400,9 @@ window.addEventListener("keyup", function(e) {
 	}
 });
 
-
 /* GRAPHICS */
 
-function Player(plane_id, pos, rot, click, user_name) {
+function Plane(plane_id, pos, rot, click, trail_material) {
 	// Add plane and subsidiary objects to scene
 	var material = plane_material.clone();
 	THREE.Mesh.call(this, plane_geometry, material);
@@ -437,14 +425,12 @@ function Player(plane_id, pos, rot, click, user_name) {
 	this.plane_id = plane_id;
 	this.fade_id = -1;
 	this.destroyed = false;
-	this.user_name = user_name;
-	this.score = players.has(plane_id) ? players.get(plane_id).score : 0;
-	players.set(plane_id, this);
+	planes.set(plane_id, this);
 	// Add trail
 	this.old_coords = { left: this.left_guide.getWorldPosition(), right: this.right_guide.getWorldPosition() };
 	this.trail_index = 0; // The index into which to insert the next vertices 
 	this.trail_geometry = new THREE.BufferGeometry();
-	this.trail_mesh = new THREE.Mesh(this.trail_geometry, (own_id == plane_id) ? own_material : other_material);
+	this.trail_mesh = new THREE.Mesh(this.trail_geometry, trail_material);
 	this.trail_mesh.frustumCulled = false;
 	scene.add(this.trail_mesh);
 	var trail_vertices = new Float32Array(num_trail_vertices);
@@ -455,18 +441,17 @@ function Player(plane_id, pos, rot, click, user_name) {
 	this.trail_geometry.addAttribute("normal", normal_buffer);
 }
 
-Player.prototype = Object.create(THREE.Mesh.prototype);
-Player.prototype.constructor = Player;
-Player.prototype.rotate_prop = function() {
+Plane.prototype = Object.create(THREE.Mesh.prototype);
+Plane.prototype.constructor = Plane;
+Plane.prototype.rotate_prop = function() {
 	this.prop.rotateY(this.click ? fast_rotate : slow_rotate);
 }
 
-Player.prototype.get_coords = function() {
+Plane.prototype.get_coords = function() {
 	return { left: this.left_guide.getWorldPosition(), right: this.right_guide.getWorldPosition() };
 }
 
-Player.prototype.add_trail = function(new_coords) {
-	this.seq++;
+Plane.prototype.add_trail = function(new_coords) {
 	if (this.old_coords.left.distanceTo(new_coords.left) < outer_radius / 2) { // Plane did not leave arena
 		draw_quadrilateral( [this.old_coords.left, this.old_coords.right, new_coords.right, new_coords.left], player = this );
 	}
@@ -477,7 +462,7 @@ Player.prototype.add_trail = function(new_coords) {
 	this.old_coords = new_coords;
 }
 
-Player.prototype.create_trail = function(trail, seq) {
+Plane.prototype.create_trail = function(trail, seq) {
 	for ( var i = 0; i < trail.length; i++ ) {
 		var new_coords = {
 			left : new THREE.Vector3(trail[i].left.x, trail[i].left.y, trail[i].left.z),
@@ -488,7 +473,7 @@ Player.prototype.create_trail = function(trail, seq) {
 	this.seq = seq;
 }
 
-Player.prototype.add_camera = function() {
+Plane.prototype.add_camera = function() {
 	this.add(camera);
 	camera.position.set(camera_position.x, camera_position.y, camera_position.z);
 	camera.lookAt(camera_position.x, camera_position.y + 1, camera_position.z);
@@ -546,15 +531,16 @@ function draw_moon() {
 }
 
 function draw_bounds() {
+	var e = buffer;
 	var l = 2 * outer_radius;
-	var p0 = new THREE.Vector3(0, 0, 0);
-	var p1 = new THREE.Vector3(0, 0, l);
-	var p2 = new THREE.Vector3(0, l, l);
-	var p3 = new THREE.Vector3(0, l, 0);
-	var p4 = new THREE.Vector3(l, 0, 0);
-	var p5 = new THREE.Vector3(l, 0, l);
+	var p0 = new THREE.Vector3(e, e, e);
+	var p1 = new THREE.Vector3(e, e, l);
+	var p2 = new THREE.Vector3(e, l, l);
+	var p3 = new THREE.Vector3(e, l, e);
+	var p4 = new THREE.Vector3(l, e, e);
+	var p5 = new THREE.Vector3(l, e, l);
 	var p6 = new THREE.Vector3(l, l, l);
-	var p7 = new THREE.Vector3(l, l, 0);
+	var p7 = new THREE.Vector3(l, l, e);
 	var geometry0 = draw_quadrilateral( [p0, p1, p2, p3] );
 	sides.x0 = new THREE.MeshBasicMaterial(bounds_back);
 	scene.add( new THREE.Mesh(geometry0, sides.x0) );
@@ -576,7 +562,7 @@ function draw_bounds() {
 }
 
 function update_bounds() {
-	var coords = own_player.getWorldPosition();
+	var coords = own_plane.getWorldPosition();
 	for ( var dim of ["x", "y", "z"] ) {
 		sides[dim + 0].opacity = coords[dim] < vis_dist + buffer ? 1 - (coords[dim] - buffer) / vis_dist : 0;
 		sides[dim + 1].opacity = coords[dim] > 2 * outer_radius - buffer - vis_dist ? 1 - (2 * outer_radius - buffer - coords[dim]) / vis_dist : 0;
@@ -597,19 +583,17 @@ function explode(player) {
 }
 
 function fade_away(player) {
+	player.material.opacity -= fade_increment;
 	if (player.material.opacity <= 0) {
 		clearInterval(player.fade_id);
 		scene.remove(player);
 		scene.remove(player.trail_mesh);
-		requestAnimationFrame(render);
 	}
-	else {
-		player.material.opacity -= fade_increment;
-		requestAnimationFrame(render);
-	}
+	requestAnimationFrame(render);
 }
 
-function draw_scoreboard() {
+function calculate_ranking() {
+	if (screen_status != "game") return;
 	var new_body = document.createElement("tbody");
 	score_table.replaceChild(new_body, score_table_body);
 	score_table_body = new_body;
@@ -618,22 +602,16 @@ function draw_scoreboard() {
 		new_row = score_table.insertRow();
 		score_table_cells.push( {name:  new_row.insertCell(), score: new_row.insertCell()} );
 	}
-	if (score_table.style.visibility == "visible") {
-		score_table.style.visibility = "hidden";
-		return;
-	}
-	score_table.style.visibility = "visible";
 	var player_info = [];
-	for ( var player of players.values() ) {
-		if (!player.disconnected) {
-			player_info.push( { user_name: player.user_name, plane_id: player.plane_id, score: player.score} );
-		}
+	for ( var [name, score] of players.entries() ) {
+		player_info.push( { user_name: name, score: score} );
 	}
 	player_info.sort( (a, b) => (a.score > b.score) ? -1 : 1 );
 	for (var i = 0; i < player_info.length; i++) {
-		if (player_info[i].plane_id == own_id) {
+		if (player_info[i].user_name == user_name) {
 			score_table_cells[i].name.innerHTML = "<strong>" + player_info[i].user_name + "</strong>";
 			score_table_cells[i].score.innerHTML = "<strong>" + player_info[i].score + "</strong>";
+			rank.innerHTML = "Rank: " + (i+1) + '/' + player_info.length;
 		}
 		else {
 			score_table_cells[i].name.innerHTML = player_info[i].user_name;
@@ -650,7 +628,6 @@ function set_visibility(type) {
 		gas_bar.style.visibility = "visible";
 		timer.style.visibility = "visible";
 		rank.style.visibility = "visible";
-		score_table.visibility = "visible";
 	}
 	else if (type == "text") {
 		main_screen.style.visibility = "visible";
@@ -658,7 +635,7 @@ function set_visibility(type) {
 		gas_bar.style.visibility = "hidden";
 		timer.style.visibility = "hidden";
 		rank.style.visibility = "hidden";
-		score_table.visibility = "hidden";
+		score_table.style.visibility = "hidden";
 	}
 }
 
