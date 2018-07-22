@@ -1,10 +1,22 @@
-A three-dimensional version of Snake.
+**How to Run**
 
-Running the game:
+To run the game on your local machine, enter the following commands:
 
-To run the game, execute the server-side code (stored in the file "server.js") using Node.js, then open a connection to the server on port 3000 using a standard browser.
+```
+git clone https://github.com/vungureanu/plane-game.git
+cd plane-game
+npm install
+node js/server.js
+```
+Then establish a connection on port 3000 using your web browser.  One assumes the role of a pilot whose plane leaves a toxic plume in its wake; the objective of the game is to entangle one's opponents in this plume.  The pitch and yaw of the plane can be controlled using the mouse, while its roll can be controlled using the *a* and *d* keys.  Clicking the mouse causes the plane to travel faster, but consumes gas; traveling at the normal speed replenishes the available gas.  If the plane travels outside of the playing arena, it will reappear at the opposite end. 
 
-Documentation:
+**Documentation**
+
+**Overview**
+
+Each player is represented by a Player object, which identifies the player via a unique ID.  This object holds information about the input received from the player and about the player's plane, including its location, rotation, and the shape of its plume.  The shape of a plume is represented by `trail_length` pairs of coordinates; the last pair corresponds to the current location of the plane's wing-tips, the second-to-last pair to their previous location, and so on.  The plume is depicted by a collection of triangles, each of which represents a stream of plume particles issuing from the plane's wings.  When a new pair of coordinates is added, the oldest pair is removed to simulate the particles' dissipation.
+
+Two consecutive pairs of plume particles define a quadrilateral which can be approximated by a parallelogram.    The playing arena is partitioned into a grid of cubes; planes and plume particles must inform the cube in question when entering or leaving (or dissipating, as the case may be).  
 
 The following variables can be configured on the server side:
 
