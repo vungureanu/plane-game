@@ -61,7 +61,7 @@ const bounds_back = {
 var trail_length;
 const send_interval = 25;
 const star_offset = 300; // Minimum distance of stars from arena 
-var num_trail_vertices; // Total number of vertices in trail left by plane
+var num_trail_coordinates; // Total number of coordinates used to represent trail left by plane
 const field_of_view = 90; // Field of view of camera, in degrees
 var outer_radius; // Half of arena's length
 var inner_radius; // Radius of obstacle at center of arena
@@ -157,7 +157,7 @@ function draw_quadrilateral(vertex_array, player = false) {
 	}
 	else {
 		var geometry = new THREE.BufferGeometry();
-		geometry.addAttribute( "position", new THREE.BufferAttribute(new Float32Array(18), 3) ); // 2 triangular faces * 3 vertices/face * 3 coordinates/vertex = 18 vertices
+		geometry.addAttribute( "position", new THREE.BufferAttribute(new Float32Array(18), 3) );
 		geometry.addAttribute( "normal", new THREE.BufferAttribute(new Float32Array(18), 3) );
 		var trail_array = geometry.attributes.position.array;
 		var normal_array = geometry.attributes.normal.array;
@@ -207,9 +207,11 @@ socket.on("update", function(status) {
 				plane.click = status.click;
 			}
 			plane.rotate_prop();
-			plane.updateMatrixWorld(); 
-			plane.add_trail( plane.get_coords() );
-			plane.seq = status.seq;
+			plane.updateMatrixWorld();
+			while (plane.seq < status.seq) { // We have received some data out of order; fill the missing data with blanks
+				plane.add_trail( plane.get_coords() );
+				plane.seq++;
+			}
 			requestAnimationFrame(render);
 		}
 	}
@@ -235,6 +237,10 @@ socket.on("score", function(user_name) {
 		players.set(user_name, 1);
 	}
 	calculate_ranking();
+});
+
+socket.on("collision_data", function(points) {
+	collision_debugger.draw_collision_data(points);
 });
 
 function render() {
@@ -302,7 +308,7 @@ socket.on("config", function(config) {
 	outer_radius = config.outer_radius;
 	seconds_left = config.seconds_left;
 	buffer = config.buffer;
-	num_trail_vertices = (trail_length - 1) * 18;
+	num_trail_coordinates = (trail_length - 1) * 18; // 2 triangular faces * 3 vertices/face * 3 coordinates/vertex = 18 vertices
 	planes = new Map();
 	camera = new THREE.PerspectiveCamera(field_of_view, window.innerWidth/game_height, 0.1, 1000);
 	scene = new THREE.Scene();
@@ -433,10 +439,10 @@ function Plane(plane_id, pos, rot, click, trail_material) {
 	this.trail_mesh = new THREE.Mesh(this.trail_geometry, trail_material);
 	this.trail_mesh.frustumCulled = false;
 	scene.add(this.trail_mesh);
-	var trail_vertices = new Float32Array(num_trail_vertices);
+	var trail_vertices = new Float32Array(num_trail_coordinates);
 	var position_buffer = new THREE.BufferAttribute(trail_vertices, 3); // Holds the coordinates of the vertices in the trail
 	this.trail_geometry.addAttribute("position", position_buffer);
-	var trail_normals = new Float32Array(num_trail_vertices);
+	var trail_normals = new Float32Array(num_trail_coordinates);
 	var normal_buffer = new THREE.BufferAttribute(trail_normals, 3); // Holds the normals to each triangle in the trail
 	this.trail_geometry.addAttribute("normal", normal_buffer);
 }
@@ -458,7 +464,7 @@ Plane.prototype.add_trail = function(new_coords) {
 	else {
 		draw_quadrilateral( [new_coords.left, new_coords.right, new_coords.right, new_coords.left], player = this );
 	}
-	this.trail_index = (this.trail_index + 18) % num_trail_vertices;
+	this.trail_index = (this.trail_index + 18) % num_trail_coordinates;
 	this.old_coords = new_coords;
 }
 
@@ -640,3 +646,27 @@ function set_visibility(type) {
 }
 
 set_visibility("text");
+
+/* DEBUGGING */
+
+function Collision_Debugger() {
+	this.std_material = new THREE.MeshBasicMaterial( {color: 0xffff00} );
+	this.collision_geometry = new THREE.Geometry();
+	this.collision_mesh = new THREE.Mesh(this.collision_geometry, this.std_material);
+	scene.add(this.collision_mesh);
+	this.draw_collision_data = function(points) {
+		scene.remove(this.collision_mesh);
+		this.collision_geometry = new THREE.Geometry();
+		for (point of points) {
+			let geometry = new THREE.SphereGeometry(1, 1, 1);
+			let object = new THREE.Object3D();
+			object.position.set(point.x, point.y, point.z);
+			object.updateMatrix();
+			this.collision_geometry.merge(geometry, object.matrix);
+		}
+		this.collision_mesh = new THREE.Mesh(this.collision_geometry, this.std_material);
+		scene.add(this.collision_mesh);
+	}
+}
+
+var collision_debugger = new Collision_Debugger();

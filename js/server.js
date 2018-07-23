@@ -29,7 +29,7 @@ const respawn_time = 1000; // Interval between destruction of plane and respawni
 const accepted_characters = /^[0-9 + a-z + A-Z + _]+$/;
 const gas_replenish = 2;
 const gas_deplete = -3;
-//var available_ids = new ID_Heap(10); // Contains unused IDs
+const invulnerable_period = 1500; // Period of time after deployment during which plane is invulnerable
 
 var planes = new Map(); // Holds information about each plane
 var players = new Set(); // Holds information about each player
@@ -54,6 +54,8 @@ function Plane(player) {
 	this.click = false; // Whether mouse is depressed
 	this.roll = "None";
 	this.seq = 1;
+	this.invulnerable = true;
+	setTimeout(() => this.invulnerable = false, invulnerable_period);
 	this.deploy_plane();
 }
 
@@ -89,7 +91,7 @@ Plane.prototype.update_trail = function() {
 		// The two trail triangles share two vertices; the third vertex therefore determines one of the triangles
 		var oldest_datum = this.collision_data.shift();
 		oldest_datum.cell.trails.delete(oldest_datum);
-		var collision_datum = get_collision_datum(this.left_guide.coords, this.right_guide.old_coords, third_coord, this);
+		var collision_datum = get_collision_datum(third_coord, this.left_guide.coords, this.right_guide.old_coords, this);
 		collision_datum.cell.trails.add(collision_datum);
 		this.collision_data.push(collision_datum);
 	}
@@ -150,10 +152,11 @@ Plane.prototype.update_location = function() {
 }
 
 Plane.prototype.check_collisions = function() {
+	if (this.invulnerable) return false;
 	for (var neighbor of this.cell.neighbors) { // Plane may have collided with object in adjacent cell
 		for (var collision_data of neighbor.trails) {
 			if ( collision_data.plane != this && this.getEdges().some( edge => intersects(collision_data, edge)) ) {
-				console.log(this.plane_id, "hit", collision_data.plane.plane_id);
+				console.log("Plane", this.plane_id, "hit plane", collision_data.plane.plane_id);
 				collision_data.plane.player.score++;
 				io.emit("score", collision_data.plane.player.user_name);
 				this.destroy_plane("collision");
@@ -227,17 +230,29 @@ Plane.prototype.deploy_plane = function() {
 	this.right_guide.coords = this.right_guide.getWorldPosition();
 	this.cell = get_cell(this.position);
 	this.cell.planes.add(this);
-	for (var i = 0; i < 2 * (trail_length - 1); i++) { // Pump in some filler data to ensure arrays are of the right length
-		collision_datum = {cell: this.cell}; // Necessary, since "update_trail" requires that all collision data reference a cell
+	this.trail.push( {left: this.left_guide.coords, right: this.right_guide.coords} ); // First trail line has no associated "collision_data"
+	for (var i = 0; i < trail_length - 1; i++) { // Pump in some filler data to ensure arrays are of the right length
+		collision_datum = {cell: this.cell, point: null}; // Necessary, since "update_trail" requires that all collision data reference a cell
 		this.collision_data.push(collision_datum);
 		this.collision_data.push(collision_datum);
-	}
-	for (var i = 0; i < trail_length; i++) { // Pump in some filler data to ensure arrays are of the right length
 		this.trail.push( {left: this.left_guide.coords, right: this.right_guide.coords} );
 	}
 	var msg = this.get_data(false);
 	this.player.socket.broadcast.emit("add", msg);
 	this.player.socket.emit("id", msg);
+}
+
+function send_collision_data() { // Used for debugging
+	var centers = [];
+	for (player of players) {
+		if (player.plane == null) continue;
+		for (collision_datum of player.plane.collision_data) {
+			if (collision_datum.point != null) {
+				centers.push(collision_datum.point);
+			}
+		}
+	}
+	io.emit("collision_data", centers);
 }
 
 function Player(socket) {
@@ -287,7 +302,9 @@ io.on("connect", function(socket) {
 	var player = new Player(socket);
 	players.add(player);
 	socket.on("start", function(user_name) {
-		if (!game_in_progress) start_new_round();
+		if (!game_in_progress) {
+			start_new_round();
+		}
 		player.set_user_name(user_name);
 		player.active = true;
 		socket.emit( "config", get_configuration_data() );
@@ -355,7 +372,7 @@ function get_collision_datum(p1, p2, p3, plane) {
 	var collision_data = {
 		matrix: matrix,
 		normal: v3,
-		point: p1,
+		point: center, // p1,
 		plane: plane,
 		cell: get_cell(center)
 	};
