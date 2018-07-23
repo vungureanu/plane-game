@@ -12,13 +12,14 @@ const inner_radius = 100; // Radius of obstacle in middle of arena
 const side_length = 15; // Upper bound on distance from center of plane to any point on plane
 const radius_buffer_squared = Math.pow(inner_radius + side_length, 2);
 const radius_squared = Math.pow(inner_radius, 2);
-const refresh_time = 100; // Milliseconds between successive refreshes
+const refresh_rate = 20; // Milliseconds between successive refreshes
 const trail_length = 100; // Maximum number of rectangles in plane's trail
-const normal_speed = 1.5;
-const fast_speed = 5;
-const turn_speed = 0.25;
+const normal_speed = 0.5;
+const fast_speed = 1.5;
+const turn_speed = 0.3;
+const roll_speed = 0.1;
 const cell_dim = 50; // Side length of cubes into which space is partitioned for collision detection purposes
-const initial_gas = 300;
+const initial_gas = 800;
 const buffer = 20; // Determines plane's new location after stepping out of bounds
 var cells; // Will hold array of cells (constant once intialized)
 const n = 2 * Math.ceil(outer_radius / cell_dim); // Number of cubes per side
@@ -30,6 +31,7 @@ const accepted_characters = /^[0-9 + a-z + A-Z + _]+$/;
 const gas_replenish = 2;
 const gas_deplete = -3;
 const invulnerable_period = 1500; // Period of time after deployment during which plane is invulnerable
+const send_data_rate = 40;
 
 var planes = new Map(); // Holds information about each plane
 var players = new Set(); // Holds information about each player
@@ -38,6 +40,8 @@ var update_id; // Identifies timer responsible for periodically updating scene
 var timer_id; // Identifies timer responsible for keeping track of time remaining in round 
 var game_in_progress = false;
 var cur_id = 1;
+var timer_ids = {update_id: null, countdown_id: null, send_data_id: null};
+
 
 http.listen(3000, function() {
 	console.log('listening on *:3000');
@@ -71,7 +75,7 @@ Plane.prototype.getEdges = function() {
 	return edges;
 }
 
-Plane.prototype.get_data = function(send_trail) {
+Plane.prototype.get_data = function(send_trail = false) {
 	// Send data about plane, possibly including full trail
 	return {
 		id: this.plane_id,
@@ -129,7 +133,7 @@ Plane.prototype.update_location = function() {
 	this.rotateZ(-this.x_frac * speed * turn_speed);
 	this.rotateX(-this.y_frac * speed * turn_speed);
 	if (this.roll != "None") {
-		this.rotateY( this.roll == "CW" ? turn_speed : -turn_speed);
+		this.rotateY( this.roll == "CW" ? roll_speed : -roll_speed);
 	}
 	this.translateY(speed);
 	this.updateMatrixWorld();
@@ -146,6 +150,8 @@ Plane.prototype.update_location = function() {
 	this.update_trail();
 	if (this.position.distanceToSquared(center) <= radius_buffer_squared) {
 		if ( crashed(this.left_guide) || crashed(this.right_guide) || crashed(this.top_guide) || crashed(this.bottom_guide) ) {
+			this.player.score--;
+			io.emit("crash", this.player.user_name);
 			this.destroy_plane("crash");
 		}
 	}
@@ -176,7 +182,7 @@ Plane.prototype.destroy_plane = function(reason, redeploy = true) {
 		}
 		this.cell.planes.delete(this);
 		planes.delete(this.plane_id);
-		if (redeploy) setTimeout(redeploy_plane.bind(this), respawn_time);
+		if (redeploy) setTimeout(this.redeploy_plane.bind(this), respawn_time);
 	}
 	else {
 		// Should never happen
@@ -201,7 +207,7 @@ Plane.prototype.draw_plane = function() {
 	this.bottom_guide.position.set(0, -6, 0.5);
 }
 
-function redeploy_plane() {
+Plane.prototype.redeploy_plane = function() {
 	if (game_in_progress) this.deploy_plane();
 }
 
@@ -237,7 +243,7 @@ Plane.prototype.deploy_plane = function() {
 		this.collision_data.push(collision_datum);
 		this.trail.push( {left: this.left_guide.coords, right: this.right_guide.coords} );
 	}
-	var msg = this.get_data(false);
+	var msg = this.get_data();
 	this.player.socket.broadcast.emit("add", msg);
 	this.player.socket.emit("id", msg);
 }
@@ -279,7 +285,7 @@ Player.prototype.set_user_name = function(user_name) {
 	}
 }
 
-function disconnect() { // "this" is meant to refer to a "Player"
+Player.prototype.disconnect = function() {
 	if (game_in_progress) this.plane.destroy_plane("disconnection", redeploy = false);
 	planes.delete(this.plane_id);
 	players.delete(this);
@@ -289,9 +295,14 @@ function update_world() {
 	for ( var plane of planes.values() ) {
 		if (plane.deployed) {
 			plane.update_location();
-			io.emit( "update", plane.get_data(false) );
 			plane.check_collisions();
 		}
+	}
+}
+
+function send_data() {
+	for ( var plane of planes.values() ) {
+		if (plane.deployed) io.emit( "update", plane.get_data() );
 	}
 }
 
@@ -309,7 +320,7 @@ io.on("connect", function(socket) {
 		player.active = true;
 		socket.emit( "config", get_configuration_data() );
 		for ( var plane of planes.values() ) {
-			if (plane.deployed) socket.emit( "add", plane.get_data(true) );
+			if (plane.deployed) socket.emit( "add", plane.get_data(send_trail = true) );
 		}
 		player.plane = new Plane(player);
 		socket.emit( "scores", get_scores() );
@@ -326,7 +337,7 @@ io.on("connect", function(socket) {
 			console.log("Data received from unknown plane:", status.id);
 		}
 	});
-	socket.on( "disconnect", disconnect.bind(player) );
+	socket.on( "disconnect", player.disconnect.bind(player) );
 });
 
 /* GRAPHICS */
@@ -426,8 +437,10 @@ function get_neighbors(x, y, z) {
 
 function start_new_round() {
 	console.log("Starting new round.");
-	update_id = setInterval(update_world, refresh_time);
-	timer_id = setInterval(count_down, 1000);
+	timer_ids.update_id = setInterval(update_world, refresh_rate);
+	timer_ids.send_data_id = setInterval(send_data, send_data_rate);
+	timer_ids.countdown_id = setInterval(count_down, 1000);
+
 	planes = new Map();
 	for (player of players) {
 		player.active = false;
@@ -469,8 +482,9 @@ function get_cell(v) {
 function count_down() {
 	if (seconds_left <= 0) { // Clear data associated with present round and show results
 		game_in_progress = false;
-		clearInterval(update_id);
-		clearInterval(timer_id);
+		clearInterval(timer_ids.update_id);
+		clearInterval(timer_ids.send_data_id);
+		clearInterval(timer_ids.countdown_id);
 		results = Array.from(players).filter(p => p.active).map(p => ({user_name: p.user_name, score: p.score}) );
 		io.emit("result", results);
 	}

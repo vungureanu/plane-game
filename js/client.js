@@ -13,8 +13,8 @@ var socket = io();
 const num_stars = 100;
 const moon_texture = new THREE.TextureLoader().load("resources/moon.jpg");
 var plane_template;
-const slow_rotate = 0.3;
-const fast_rotate = 0.6;
+const slow_rotate = 0.1;
+const fast_rotate = 0.2;
 const camera_position = new THREE.Vector3(0, -1, 2);
 const score_table = document.getElementById("score_table");
 var score_table_body = document.getElementById("score_table_body");
@@ -87,7 +87,7 @@ const fade_increment = 0.05;
 const accepted_characters = /[0-9 + a-z + A-Z + _]/;
 var current_results = null; // Holds latest results
 
-/* GRAPHICS */
+/* TEXT GRAPHICS */
 
 const main_screen = document.getElementById("main_screen");
 main_screen.width = window.innerWidth;
@@ -145,36 +145,6 @@ function display_results() {
 	}
 	msg += "\n\n\nPress ENTER to continue"
 	format_text(msg);
-	current_results = [];
-}
-
-function draw_quadrilateral(vertex_array, player = false) {
-	// Consecutive vertices in "vertex_array", including first and last vertices, should be adjacent
-	if (player) {
-		var trail_array = player.trail_geometry.attributes.position.array;
-		var normal_array = player.trail_geometry.attributes.normal.array;
-		var index = player.trail_index;
-	}
-	else {
-		var geometry = new THREE.BufferGeometry();
-		geometry.addAttribute( "position", new THREE.BufferAttribute(new Float32Array(18), 3) );
-		geometry.addAttribute( "normal", new THREE.BufferAttribute(new Float32Array(18), 3) );
-		var trail_array = geometry.attributes.position.array;
-		var normal_array = geometry.attributes.normal.array;
-		var index = 0;
-	}
-	var normal = new THREE.Vector3().crossVectors( minus(vertex_array[1], vertex_array[0]), minus(vertex_array[3], vertex_array[1]) ); // Approximate normal to quadrilateral (quadrilateral need not be planar)
-	normal.normalize(); // normalizing the zero vector seems to leave it unchanged
-	var faces = [0, 1, 2, 2, 3, 0]; // The first face is formed by the first three vertices in "vertex_array", and the second by the first and last two vertices
-	for (var i = 0; i < faces.length; i++) {
-		trail_array[index + 3 * i] = vertex_array[faces[i]].x;
-		trail_array[index + 3 * i + 1] = vertex_array[faces[i]].y;
-		trail_array[index + 3 * i + 2] = vertex_array[faces[i]].z;
-		normal_array[index + 3 * i] = normal.x;
-		normal_array[index + 3 * i + 1] = normal.y;
-		normal_array[index + 3 * i + 2] = normal.z;
-	}
-	return geometry;
 }
 
 function minus(v1, v2) {
@@ -201,7 +171,7 @@ socket.on("update", function(status) {
 			plane.position.set(status.pos.x, status.pos.y, status.pos.z);
 			if (status.id == own_plane.plane_id) {
 				update_bounds();
-				update_gas(status.gas);
+				draw_gas(status.gas);
 			}
 			else {
 				plane.click = status.click;
@@ -235,6 +205,16 @@ socket.on("score", function(user_name) {
 	}
 	else { // Client has not yet received information about player
 		players.set(user_name, 1);
+	}
+	calculate_ranking();
+});
+
+socket.on("crash", function(user_name) {
+	if (players.has(user_name)) {
+		players.set(user_name, players.get(user_name) - 1);
+	}
+	else { // Client has not yet received information about player
+		players.set(user_name, -1);
 	}
 	calculate_ranking();
 });
@@ -288,7 +268,7 @@ socket.on("destroy", function(status) {
 			calculate_ranking();
 		}
 		else {
-			explode( planes.get(status.id) );
+			planes.get(status.id).explode();
 		}
 		planes.delete(status.id);
 	}
@@ -315,7 +295,7 @@ socket.on("config", function(config) {
 	draw_moon();
 	draw_background();
 	draw_bounds();
-	update_gas();
+	draw_gas();
 	draw_time();
 });
 
@@ -341,11 +321,12 @@ window.addEventListener("mousemove", function(e) {
 });
 
 window.addEventListener("resize", function() {
+	console.log(screen_status);
 	game_height = window.innerHeight * frac;
 	renderer.setSize(window.innerWidth, game_height);
 	camera.aspect = window.innerWidth / game_height;
 	camera.updateProjectionMatrix();
-	update_gas();
+	draw_gas();
 	if (screen_status == "start") {
 		format_text(enter_name + user_name + start_message);
 	}
@@ -406,7 +387,7 @@ window.addEventListener("keyup", function(e) {
 	}
 });
 
-/* GRAPHICS */
+/* PLANE-RELATED METHODS */
 
 function Plane(plane_id, pos, rot, click, trail_material) {
 	// Add plane and subsidiary objects to scene
@@ -488,6 +469,26 @@ Plane.prototype.add_camera = function() {
 	this.add(light);
 }
 
+Plane.prototype.explode = function() {
+	this.destroyed = true;
+	scene.remove(this.trail_mesh);
+	this.material.transparent = true;
+	this.fade_id = setInterval(this.fade_away.bind(this), fade_rate);
+}
+
+Plane.prototype.fade_away = function() {
+	this.material.opacity -= fade_increment;
+	if (this.material.opacity <= 0) {
+		clearInterval(this.fade_id);
+		scene.remove(this.trail_mesh);
+		scene.remove(this);
+		
+	}
+	requestAnimationFrame(render);
+}
+
+/* GRAPHICS */
+
 function draw_background() {
 	var material = new THREE.MeshBasicMaterial( {color: 0xffffff} );
 	var merged_geometry = new THREE.Geometry();
@@ -514,7 +515,36 @@ function draw_background() {
 	stars.matrixAutoUpdate = false;
 }
 
-function update_gas(gas) {
+function draw_quadrilateral(vertex_array, player = false) {
+	// Consecutive vertices in "vertex_array", including first and last vertices, should be adjacent
+	if (player) {
+		var trail_array = player.trail_geometry.attributes.position.array;
+		var normal_array = player.trail_geometry.attributes.normal.array;
+		var index = player.trail_index;
+	}
+	else {
+		var geometry = new THREE.BufferGeometry();
+		geometry.addAttribute( "position", new THREE.BufferAttribute(new Float32Array(18), 3) );
+		geometry.addAttribute( "normal", new THREE.BufferAttribute(new Float32Array(18), 3) );
+		var trail_array = geometry.attributes.position.array;
+		var normal_array = geometry.attributes.normal.array;
+		var index = 0;
+	}
+	var normal = new THREE.Vector3().crossVectors( minus(vertex_array[1], vertex_array[0]), minus(vertex_array[3], vertex_array[1]) ); // Approximate normal to quadrilateral (quadrilateral need not be planar)
+	normal.normalize(); // normalizing the zero vector seems to leave it unchanged
+	var faces = [0, 1, 2, 2, 3, 0]; // The first face is formed by the first three vertices in "vertex_array", and the second by the first and last two vertices
+	for (var i = 0; i < faces.length; i++) {
+		trail_array[index + 3 * i] = vertex_array[faces[i]].x;
+		trail_array[index + 3 * i + 1] = vertex_array[faces[i]].y;
+		trail_array[index + 3 * i + 2] = vertex_array[faces[i]].z;
+		normal_array[index + 3 * i] = normal.x;
+		normal_array[index + 3 * i + 1] = normal.y;
+		normal_array[index + 3 * i + 2] = normal.z;
+	}
+	return geometry;
+}
+
+function draw_gas(gas) {
 	gas_bar.width = window.innerWidth;
 	gas_bar.height = window.innerHeight - game_height;
 	gas_bar.style.top = game_height;
@@ -534,6 +564,10 @@ function draw_moon() {
 	var moon = new THREE.Mesh(geometry, material);
 	moon.position.set(outer_radius, outer_radius, outer_radius);
 	scene.add(moon);
+}
+
+function draw_time() {
+	timer.innerHTML = "Time remaining: " + Math.floor(seconds_left / 60) + ":" + (seconds_left % 60 < 10 ? "0" : "") + (seconds_left % 60);
 }
 
 function draw_bounds() {
@@ -575,28 +609,7 @@ function update_bounds() {
 	}
 }
 
-function draw_time() {
-	timer.innerHTML = "Time remaining: " + Math.floor(seconds_left / 60) + ":" + (seconds_left % 60 < 10 ? "0" : "") + (seconds_left % 60);
-}
-
 /* MISC */
-
-function explode(player) {
-	player.destroyed = true;
-	scene.remove(player.trail_mesh);
-	player.material.transparent = true;
-	player.fade_id = setInterval(fade_away, fade_rate, player);
-}
-
-function fade_away(player) {
-	player.material.opacity -= fade_increment;
-	if (player.material.opacity <= 0) {
-		clearInterval(player.fade_id);
-		scene.remove(player);
-		scene.remove(player.trail_mesh);
-	}
-	requestAnimationFrame(render);
-}
 
 function calculate_ranking() {
 	if (screen_status != "game") return;
