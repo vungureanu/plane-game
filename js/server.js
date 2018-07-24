@@ -42,10 +42,16 @@ var game_in_progress = false;
 var cur_id = 1;
 var timer_ids = {update_id: null, countdown_id: null, send_data_id: null};
 
-
-http.listen(3000, function() {
-	console.log('listening on *:3000');
-});
+if ( process.argv.length <= 2 || isNaN(parseInt(process.argv[2])) ) {
+	http.listen(3000, function() {
+		console.log("Listening on *:3000");
+	});
+}
+else {
+	http.listen(parseInt(process.argv[2]), function() {
+		console.log("Listening on *:" + process.argv[2]);
+	});
+}
 
 app.use(exp.static(__dirname + "/.."));
 
