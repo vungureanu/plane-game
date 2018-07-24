@@ -71,7 +71,7 @@ var y_frac;
 var roll; // Indicates whether player wishes plane to roll clockwise, counterclockwise, or not at all
 var planes = new Map(); // Map which associates plane IDs with planes
 var players = new Map(); // Map which associates user-names with scores
-var send_data_id;
+var send_data_id; // Identifies timer for sending data to server
 var own_plane = { click: false, destroyed: false }; // "own_plane" is either this minimal object, or the user's "Plane"
 var sides = {};
 var camera = new THREE.PerspectiveCamera(field_of_view, window.innerWidth/game_height, 0.1, 1000);
@@ -164,26 +164,26 @@ function send_data() {
 }
 
 socket.on("update", function(status) {
-	if ( (screen_status == "waiting" || screen_status == "game") && planes.has(status.id) && !planes.get(status.id).destroyed ) {
-		var plane = planes.get(status.id);
-		if (plane.seq < status.seq) {
-			plane.setRotationFromEuler( new THREE.Euler(status.rot._x, status.rot._y, status.rot._z, status.rot._order) );
-			plane.position.set(status.pos.x, status.pos.y, status.pos.z);
-			if (status.id == own_plane.plane_id) {
-				update_bounds();
-				draw_gas(status.gas);
-			}
-			else {
-				plane.click = status.click;
-			}
-			plane.rotate_prop();
-			plane.updateMatrixWorld();
-			while (plane.seq < status.seq) { // We have received some data out of order; fill the missing data with blanks
-				plane.add_trail( plane.get_coords() );
-				plane.seq++;
-			}
-			requestAnimationFrame(render);
+	if (screen_status != "waiting" && screen_status != "game") return;
+	if (!planes.has(status.id) || planes.get(status.id).destroyed) return; // Data received is either too old (pre-destruction) or too new (post-creation)
+	var plane = planes.get(status.id);
+	if (plane.seq < status.seq) {
+		plane.setRotationFromEuler( new THREE.Euler(status.rot._x, status.rot._y, status.rot._z, status.rot._order) );
+		plane.position.set(status.pos.x, status.pos.y, status.pos.z);
+		if (status.id == own_plane.plane_id) {
+			update_bounds();
+			draw_gas(status.gas);
 		}
+		else {
+			plane.click = status.click;
+		}
+		plane.rotate_prop();
+		plane.updateMatrixWorld();
+		while (plane.seq < status.seq) { // We have received some data out of order; fill the missing data with blanks
+			plane.add_trail( plane.get_coords() );
+			plane.seq++;
+		}
+		requestAnimationFrame(render);
 	}
 });
 
@@ -232,13 +232,14 @@ function render() {
 }
 
 socket.on("id", function(status) {
+	if (planes.has(status.id)) return; // Plane has already been destroyed
 	user_name = status.user_name;
 	if (!players.has(user_name)) players.set(user_name, 0);
 	if (own_plane.destroyed) own_plane.remove(camera);
 	roll = "None";
 	x_frac = 0;
 	y_frac = 0;
-	own_plane = new Plane(status.id, status.pos, status.rot, own_plane.click, own_material);
+	own_plane = new Plane(status.id, status.pos, status.rot, own_material, own_plane.click);
 	own_plane.add_camera();
 	if (screen_status == "waiting") {
 		screen_status = "game";
@@ -250,12 +251,11 @@ socket.on("id", function(status) {
 });
 
 socket.on("add", function(status) {
-	if (!planes.has(status.id)) { // Plane was not destroyed before this message was received
-		var player = new Plane(status.id, status.pos, status.rot, false, other_material);
-		if (!players.has(status.user_name)) players.set(status.user_name, 0);
-		player.create_trail(status.trail, status.seq);
-		calculate_ranking();
-	}
+	if (planes.has(status.id)) return; // Plane has already been destroyed
+	var player = new Plane(status.id, status.pos, status.rot, other_material);
+	if (!players.has(status.user_name)) players.set(status.user_name, 0);
+	player.create_trail(status.trail, status.seq);
+	calculate_ranking();
 });
 
 socket.on("destroy", function(status) {
@@ -273,12 +273,9 @@ socket.on("destroy", function(status) {
 		planes.delete(status.id);
 	}
 	else { // Plane destroyed before message to add plane received
-		planes.set( status.id, {score: 0, destroyed: true} );
+		planes.set( status.id, {destroyed: true} );
 	}
-	if (status.id == own_plane.plane_id) {
-		clearInterval(send_data_id);
-		own_plane.plane_id = -1;
-	}
+	if (status.id == own_plane.plane_id) clearInterval(send_data_id);
 });
 
 socket.on("config", function(config) {
@@ -321,7 +318,6 @@ window.addEventListener("mousemove", function(e) {
 });
 
 window.addEventListener("resize", function() {
-	console.log(screen_status);
 	game_height = window.innerHeight * frac;
 	renderer.setSize(window.innerWidth, game_height);
 	camera.aspect = window.innerWidth / game_height;
@@ -389,7 +385,7 @@ window.addEventListener("keyup", function(e) {
 
 /* PLANE-RELATED METHODS */
 
-function Plane(plane_id, pos, rot, click, trail_material) {
+function Plane(plane_id, pos, rot, trail_material, click = false) {
 	// Add plane and subsidiary objects to scene
 	var material = plane_material.clone();
 	THREE.Mesh.call(this, plane_geometry, material);
@@ -410,12 +406,12 @@ function Plane(plane_id, pos, rot, click, trail_material) {
 	this.seq = 1;
 	this.click = click;
 	this.plane_id = plane_id;
-	this.fade_id = -1;
+	this.fade_id = null; // Used to identify timer which regulates fading away of plane when destroyed
 	this.destroyed = false;
 	planes.set(plane_id, this);
 	// Add trail
 	this.old_coords = { left: this.left_guide.getWorldPosition(), right: this.right_guide.getWorldPosition() };
-	this.trail_index = 0; // The index into which to insert the next vertices 
+	this.trail_index = 0; // Index into which to insert next trail coordinates
 	this.trail_geometry = new THREE.BufferGeometry();
 	this.trail_mesh = new THREE.Mesh(this.trail_geometry, trail_material);
 	this.trail_mesh.frustumCulled = false;

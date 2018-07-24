@@ -274,9 +274,7 @@ Player.prototype.set_user_name = function(user_name) {
 	if ( typeof user_name == "string" && user_name.match(accepted_characters) ) {
 		this.user_name = user_name.substring(0, 16);
 	}
-	else {
-		this.user_name = "guest";
-	}
+	else this.user_name = "guest";
 	var player_names = Array.from(players).filter(p => p.active).map(p => p.user_name);
 	if ( player_names.includes(this.user_name) ) {
 		suffix = 1;
@@ -333,9 +331,7 @@ io.on("connect", function(socket) {
 			plane.click = (typeof status.click) == "boolean" ? status.click : false;
 			plane.roll = (typeof status.roll) == "string" ? status.roll : "None";
 		}
-		else if (status.id != -1) {
-			console.log("Data received from unknown plane:", status.id);
-		}
+		else console.log("Data received from unknown plane", status.id);
 	});
 	socket.on( "disconnect", player.disconnect.bind(player) );
 });
@@ -392,23 +388,14 @@ function get_collision_datum(p1, p2, p3, plane) {
 
 /* INTERSECTION DETECTION */
 
-/* Checks whether the line segment from "p1" to "p2" intersects the planar section given by "matrix".
-The idea is that "matrix" represents a linear transformation which maps its associated trail rectangle to the unit
-square ([0, 1] x [0, 1] x {0}).  We need only check whether a point lying within the plane containing the trail
-rectangle is mapped to the unit square. */
-
 function intersects(collision_data, edge) {
-	// Find intersection between "edge" and trail paralellogram represented by "collision_data".
+	// Find intersection between "edge" and triangle represented by "collision_data".
 	var v = minus(edge.p2, edge.p1);
 	var dp = collision_data.normal.dot(v);
-	if (dp == 0) { // Line and plane are parallel.
-		return false;
-	}
+	if (dp == 0) return false; // Line and plane are parallel.
 	var c = minus(collision_data.point, edge.p1).dot(collision_data.normal) / dp;
-	if (c < 0 || c > 1) {
-		return false;
-	}
-	// Intersection occurs on line segment connecting "point" to "point" + "v".
+	if (c < 0 || c > 1) return false;
+	// Intersection occurs along vector "v" from specified point on triangle
 	point_of_intersection = minus(v.multiplyScalar(c), collision_data.point);
 	point_of_intersection.add(edge.p1);
 	point_of_intersection.applyMatrix3(collision_data.matrix);
